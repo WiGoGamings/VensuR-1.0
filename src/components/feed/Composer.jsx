@@ -1,5 +1,5 @@
 import './Composer.css'
-import { Suspense, lazy, useMemo, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
 import { useLiveBroadcast } from '../../contexts/LiveBroadcastContext'
@@ -22,6 +22,47 @@ const prefetchLive = () => {
 function initialsOf(user) {
   const source = user?.displayName || user?.username || 'VR'
   return source.slice(0, 2).toUpperCase()
+}
+
+const iconProps = {
+  width: 19,
+  height: 19,
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 2,
+  strokeLinecap: 'round',
+  strokeLinejoin: 'round',
+  'aria-hidden': true,
+}
+
+function StoryIcon() {
+  return (
+    <svg {...iconProps}>
+      <circle cx="12" cy="12" r="9" strokeDasharray="2.6 3.2" />
+      <path d="M12 8.5v7M8.5 12h7" strokeDasharray="0" />
+    </svg>
+  )
+}
+
+function PostIcon() {
+  return (
+    <svg {...iconProps}>
+      <rect x="3" y="4" width="18" height="16" rx="3" />
+      <circle cx="8.5" cy="9.5" r="1.6" />
+      <path d="M4 16.5l4.5-4 3.5 3 3-2.5L20 17" />
+    </svg>
+  )
+}
+
+function LiveIcon() {
+  return (
+    <svg {...iconProps}>
+      <circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none" />
+      <path d="M7.5 7.5a6.4 6.4 0 0 0 0 9M16.5 7.5a6.4 6.4 0 0 1 0 9" />
+      <path d="M4.8 4.8a10 10 0 0 0 0 14.4M19.2 4.8a10 10 0 0 1 0 14.4" opacity="0.55" />
+    </svg>
+  )
 }
 
 /**
@@ -47,6 +88,20 @@ export default function Composer({ isAuthenticated, onPostCreated }) {
     const firstName = source.trim().split(/\s+/)[0] || source
     return firstName.slice(0, 18)
   }, [user?.displayName, user?.username])
+
+  // Permite abrir el editor de historias desde la tira de historias ("Crear historia").
+  useEffect(() => {
+    const openStory = () => {
+      if (isAuthenticated) {
+        setComposerError('')
+        setIsStoryStudioOpen(true)
+      } else {
+        setComposerError('Debes iniciar sesión para crear una historia.')
+      }
+    }
+    window.addEventListener('vensur:open-story-studio', openStory)
+    return () => window.removeEventListener('vensur:open-story-studio', openStory)
+  }, [isAuthenticated])
 
   const openCreator = (type) => {
     if (!isAuthenticated) {
@@ -105,20 +160,35 @@ export default function Composer({ isAuthenticated, onPostCreated }) {
           </button>
 
           <div className="composer-quick-actions" aria-label="Accesos directos de creacion">
-            <button className="composer-quick-btn story" onClick={() => openCreator('story')} onMouseEnter={prefetchStory} title="Crear historia" type="button">
-              ◉
-            </button>
-            <button className="composer-quick-btn post" onClick={() => openCreator('post')} onMouseEnter={prefetchPost} title="Crear publicacion" type="button">
-              ▣
+            <button
+              aria-label="Crear historia"
+              className="composer-quick-btn story"
+              onClick={() => openCreator('story')}
+              onMouseEnter={prefetchStory}
+              title="Crear historia"
+              type="button"
+            >
+              <StoryIcon />
             </button>
             <button
+              aria-label="Crear publicación"
+              className="composer-quick-btn post"
+              onClick={() => openCreator('post')}
+              onMouseEnter={prefetchPost}
+              title="Crear publicación"
+              type="button"
+            >
+              <PostIcon />
+            </button>
+            <button
+              aria-label={isLive ? 'Ver tu transmisión en vivo' : 'Crear transmisión en vivo'}
               className={`composer-quick-btn live ${isLive ? 'is-live' : ''}`}
               onClick={() => openCreator('live')}
               onMouseEnter={prefetchLive}
               title={isLive ? 'Ver tu transmisión' : 'Crear en vivo'}
               type="button"
             >
-              ●
+              <LiveIcon />
             </button>
           </div>
         </div>
