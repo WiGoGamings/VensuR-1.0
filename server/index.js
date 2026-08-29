@@ -16,6 +16,39 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { sendVerificationEmail } from './lib/mailer.js'
+import {
+  addDaysIso,
+  addMinutesIso,
+  buildRecentDayKeys,
+  buildStoryTitleFromCaption,
+  clampBurst,
+  clampChance,
+  clampNumberInRange,
+  cleanBio,
+  cleanDisplayName,
+  escapeSqlLikePattern,
+  escapeXml,
+  isBcryptHash,
+  isExpired,
+  isValidEmail,
+  isValidPhone,
+  isValidUsername,
+  normalizeEmail,
+  normalizeHexColor,
+  normalizeMode,
+  normalizePhone,
+  normalizeProfileVisibility,
+  normalizeSearchQuery,
+  normalizeUsername,
+  normalizeVerificationCode,
+  nowIso,
+  parseIsoTimestamp,
+  safeString,
+  sendError,
+  toBooleanFlag,
+  toNumeric,
+  toSlugToken,
+} from './lib/helpers.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -186,14 +219,6 @@ function appendBotSuffixToEmail(email, suffix) {
   if (atIndex < 0) return `${email}.${suffix}`
 
   return `${email.slice(0, atIndex)}.${suffix}${email.slice(atIndex)}`
-}
-
-function toSlugToken(value) {
-  return String(value)
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '')
 }
 
 function buildBotDisplayName(index) {
@@ -1349,106 +1374,6 @@ const danglingLiveClosedAt = nowIso()
 closeDanglingLiveSessionsStmt.run(danglingLiveClosedAt, danglingLiveClosedAt)
 seedMusicLibrary()
 
-function nowIso() {
-  return new Date().toISOString()
-}
-
-function addMinutesIso(minutes) {
-  return new Date(Date.now() + minutes * 60 * 1000).toISOString()
-}
-
-function addDaysIso(days) {
-  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString()
-}
-
-function buildRecentDayKeys(daysCount = 7) {
-  const total = Math.max(1, Math.min(31, Math.trunc(daysCount)))
-  const out = []
-
-  for (let offset = total - 1; offset >= 0; offset -= 1) {
-    const date = new Date(Date.now() - offset * 24 * 60 * 60 * 1000)
-    out.push(date.toISOString().slice(0, 10))
-  }
-
-  return out
-}
-
-function toNumeric(value) {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : 0
-}
-
-function safeString(value) {
-  return typeof value === 'string' ? value.trim() : ''
-}
-
-function toBooleanFlag(value) {
-  if (typeof value === 'boolean') return value
-  if (typeof value === 'number') return value === 1
-
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase()
-    return normalized === 'true' || normalized === '1' || normalized === 'si' || normalized === 'yes'
-  }
-
-  return false
-}
-
-function buildStoryTitleFromCaption(value) {
-  const text = safeString(value)
-  if (!text) return 'Historia ciudadana'
-  return text.slice(0, 80)
-}
-
-function normalizeVerificationCode(value) {
-  return safeString(value).replace(/\D/g, '').slice(0, 6)
-}
-
-function normalizeEmail(value) {
-  return safeString(value).toLowerCase()
-}
-
-function normalizeUsername(value) {
-  return safeString(value)
-    .toLowerCase()
-    .replace(/\s+/g, '_')
-    .replace(/[^a-z0-9_]/g, '')
-}
-
-function normalizePhone(value) {
-  return safeString(value)
-    .replace(/[^0-9+()\-\s]/g, '')
-    .replace(/\s+/g, ' ')
-    .slice(0, 28)
-}
-
-function normalizeProfileVisibility(value) {
-  const normalized = safeString(value).toLowerCase()
-  return normalized === 'public' ? 'public' : 'private'
-}
-
-function normalizeSearchQuery(value) {
-  return safeString(value)
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .slice(0, 80)
-}
-
-function escapeSqlLikePattern(value) {
-  return safeString(value).replace(/[\\%_]/g, (symbol) => `\\${symbol}`)
-}
-
-function clampNumberInRange(value, min, max, fallback) {
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed)) return fallback
-  return Math.max(min, Math.min(max, parsed))
-}
-
-function normalizeHexColor(value) {
-  const text = safeString(value)
-  return /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(text) ? text : '#ffffff'
-}
-
 function mapMusicTrackRow(row) {
   if (!row) return null
 
@@ -1611,46 +1536,12 @@ function resolveOptionalAuthUser(req) {
   return selectUserByIdStmt.get(userId) || null
 }
 
-function cleanDisplayName(value) {
-  const trimmed = safeString(value)
-  if (!trimmed) return ''
-  return trimmed.slice(0, 80)
-}
-
-function cleanBio(value) {
-  const trimmed = safeString(value)
-  return trimmed.slice(0, 280)
-}
-
-function isValidEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-}
-
-function isValidUsername(username) {
-  return /^[a-z0-9_]{3,24}$/.test(username)
-}
-
-function isValidPhone(phone) {
-  if (!phone) return true
-  return /^[0-9+()\-\s]{6,28}$/.test(phone)
-}
-
-function isBcryptHash(value) {
-  return typeof value === 'string' && value.startsWith('$2')
-}
-
 function generateVerificationCode() {
   return String(randomInt(0, 1_000_000)).padStart(6, '0')
 }
 
 function hashVerificationCode(code) {
   return createHash('sha256').update(code).digest('hex')
-}
-
-function isExpired(isoDate) {
-  const timestamp = Date.parse(isoDate)
-  if (!Number.isFinite(timestamp)) return true
-  return timestamp <= Date.now()
 }
 
 function getMediaLabel(mediaUrl, mediaType) {
@@ -1814,24 +1705,6 @@ function clampCommentText(value, maxLength = 255) {
   return `${text.slice(0, maxLength - 3).trim()}...`
 }
 
-function clampChance(value, fallback) {
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed)) return fallback
-  return Math.max(0, Math.min(1, parsed))
-}
-
-function clampBurst(value, fallback) {
-  const parsed = Number.parseInt(value ?? '', 10)
-  if (!Number.isFinite(parsed)) return fallback
-  return Math.max(1, Math.min(8, parsed))
-}
-
-function normalizeMode(mode) {
-  const key = safeString(mode).toLowerCase()
-  if (key === 'low' || key === 'high' || key === 'normal') return key
-  return 'normal'
-}
-
 function normalizeBotBehavior(input = {}) {
   const requestedMode = normalizeMode(input.mode ?? BOT_ACTIVITY_MODE)
   const base = BOT_ACTIVITY_PRESETS[requestedMode] || BOT_ACTIVITY_PRESETS.normal
@@ -1978,15 +1851,6 @@ const toggleStoryReactionTx = db.transaction((storyId, userId, intent) => {
 
   return { liked: alreadyLiked, changed: false }
 })
-
-function escapeXml(value) {
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&apos;')
-}
 
 function buildBotSvgAsset({ title, subtitle, colorA, colorB }) {
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -2861,11 +2725,6 @@ function canViewerJoinLiveSession(viewerUserId, ownerUserId) {
   return isUserFollowing(viewerUserId, ownerUserId)
 }
 
-function parseIsoTimestamp(value) {
-  const parsed = Date.parse(typeof value === 'string' ? value : '')
-  return Number.isFinite(parsed) ? parsed : 0
-}
-
 function normalizeRtcSessionDescription(value, expectedType) {
   const type = safeString(value?.type).toLowerCase()
   const sdp = typeof value?.sdp === 'string' ? value.sdp.trim() : ''
@@ -3265,10 +3124,6 @@ async function verifyAppleIdToken(idToken) {
     email,
     emailVerified,
   }
-}
-
-function sendError(res, statusCode, message, details = {}) {
-  res.status(statusCode).json({ error: message, ...details })
 }
 
 const ALLOWED_IMAGE_EXTENSIONS = new Set([
