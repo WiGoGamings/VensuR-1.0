@@ -185,3 +185,32 @@ test('la biblioteca de musica devuelve pistas', async () => {
   assert.ok(body.items.length > 0)
   assert.ok(body.items[0].id)
 })
+
+test('el SDP del en vivo conserva el CRLF final (setRemoteDescription no falla)', async () => {
+  const owner = await createVerifiedUser(server.baseUrl, { visibility: 'public' })
+
+  const sessionRes = await fetch(`${server.baseUrl}/api/content/live/sessions`, {
+    method: 'POST',
+    headers: authHeaders(owner.token),
+    body: JSON.stringify({ title: 'Directo de prueba' }),
+  })
+  assert.equal(sessionRes.status, 201)
+  const { session } = await sessionRes.json()
+
+  // SDP mínimo cuya última línea NO trae CRLF: el servidor debe reponerlo.
+  const rawSdp = 'v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 126\r\na=rtpmap:126 telephone-event/8000'
+
+  const offerRes = await fetch(`${server.baseUrl}/api/content/live/sessions/${session.id}/viewers/offer`, {
+    method: 'POST',
+    headers: authHeaders(owner.token),
+    body: JSON.stringify({ offer: { type: 'offer', sdp: rawSdp } }),
+  })
+  assert.equal(offerRes.status, 201)
+
+  const offersRes = await fetch(`${server.baseUrl}/api/content/live/sessions/${session.id}/offers`, {
+    headers: authHeaders(owner.token),
+  })
+  const offersBody = await offersRes.json()
+  assert.equal(offersBody.items.length, 1)
+  assert.ok(offersBody.items[0].offer.sdp.endsWith('telephone-event/8000\r\n'))
+})

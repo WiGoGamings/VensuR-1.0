@@ -2731,13 +2731,22 @@ function canViewerJoinLiveSession(viewerUserId, ownerUserId) {
   return isUserFollowing(viewerUserId, ownerUserId)
 }
 
+function normalizeSdp(rawSdp) {
+  if (typeof rawSdp !== 'string') return ''
+  const trimmed = rawSdp.trim()
+  if (!trimmed) return ''
+  // El SDP de WebRTC exige que TODAS las líneas terminen en CRLF, incluida la última.
+  // Un .trim() a secas rompe la última línea -> "Invalid SDP line" en setRemoteDescription.
+  return `${trimmed.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '\r\n')}\r\n`
+}
+
 function normalizeRtcSessionDescription(value, expectedType) {
   const type = safeString(value?.type).toLowerCase()
-  const sdp = typeof value?.sdp === 'string' ? value.sdp.trim() : ''
+  const sdp = normalizeSdp(value?.sdp)
 
   if (!type || !sdp) return null
   if (type !== expectedType) return null
-  if (sdp.length > 180_000) return null
+  if (sdp.length > 200_000) return null
 
   return { type, sdp }
 }

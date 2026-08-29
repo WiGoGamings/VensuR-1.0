@@ -11,6 +11,17 @@ const LIVE_STUN_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }
 const OFFERS_POLL_INTERVAL_MS = 1100
 const ICE_GATHERING_TIMEOUT_MS = 3500
 
+// Activa logs de la señalización con: localStorage.setItem('vensur.live.debug','1')
+function liveLog(...args) {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage?.getItem('vensur.live.debug') === '1') {
+      console.log('[live]', ...args)
+    }
+  } catch {
+    // no-op
+  }
+}
+
 const LiveBroadcastContext = createContext(null)
 
 function waitForIceGatheringComplete(peerConnection, timeoutMs = ICE_GATHERING_TIMEOUT_MS) {
@@ -161,12 +172,20 @@ export function LiveBroadcastProvider({ children }) {
     const viewerId = typeof item?.viewerId === 'string' ? item.viewerId : ''
     const offer = item?.offer
 
-    if (!viewerId || !offer || offer.type !== 'offer' || typeof offer.sdp !== 'string') return
+    if (!viewerId || !offer || offer.type !== 'offer' || typeof offer.sdp !== 'string') {
+      liveLog('oferta ignorada (formato)', viewerId)
+      return
+    }
     if (processingOffersRef.current.has(viewerId)) return
+    if (peerByViewerIdRef.current.has(viewerId)) return
 
     const localStream = streamRef.current
-    if (!localStream) return
+    if (!localStream) {
+      liveLog('oferta sin responder: no hay stream local', viewerId)
+      return
+    }
 
+    liveLog('respondiendo oferta de', viewerId)
     processingOffersRef.current.add(viewerId)
     let peer = null
 
@@ -196,7 +215,9 @@ export function LiveBroadcastProvider({ children }) {
         ? { type: peer.localDescription.type, sdp: peer.localDescription.sdp }
         : { type: answer.type, sdp: answer.sdp }
 
+      liveLog('enviando answer a', viewerId)
       const response = await submitLiveViewerAnswer(activeSessionId, viewerId, finalAnswer)
+      liveLog('answer aceptada por el servidor', viewerId)
       peerByViewerIdRef.current.set(viewerId, peer)
 
       setViewers((current) => {
@@ -216,7 +237,8 @@ export function LiveBroadcastProvider({ children }) {
       if (Number.isFinite(Number(response?.viewerCount))) {
         setViewerCount(Number(response.viewerCount))
       }
-    } catch {
+    } catch (answerError) {
+      liveLog('ERROR respondiendo oferta', viewerId, answerError?.message || answerError)
       if (peer) {
         try {
           peer.close()
@@ -240,10 +262,12 @@ export function LiveBroadcastProvider({ children }) {
           if (Number.isFinite(count)) setViewerCount(Math.max(0, count))
 
           const items = Array.isArray(payload?.items) ? payload.items : []
+          if (items.length) liveLog('poll: ofertas pendientes', items.length)
           for (const item of items) {
             await handleIncomingOffer(activeSessionId, item)
           }
         } catch (pollError) {
+          liveLog('ERROR en poll', pollError?.message || pollError)
           const message = pollError instanceof Error ? pollError.message : 'No se pudo sincronizar el en vivo.'
           setError(message)
           if (message.toLowerCase().includes('ya no esta activa') || message.toLowerCase().includes('finaliz')) {
@@ -252,6 +276,7 @@ export function LiveBroadcastProvider({ children }) {
         }
       }
 
+      liveLog('polling de ofertas iniciado para', activeSessionId)
       void poll()
       pollingTimerRef.current = setInterval(() => void poll(), OFFERS_POLL_INTERVAL_MS)
     },
