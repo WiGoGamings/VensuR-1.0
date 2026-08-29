@@ -66,13 +66,13 @@ export async function getPosts() {
 }
 
 /**
- * @param {{ caption: string, mediaFile: File | null, alsoStory?: boolean }} payload
+ * @param {{ caption: string, mediaFile: File | null, alsoStory?: boolean, location?: string }} payload
  * @returns {Promise<Post>}
  */
 export async function createPost(payload) {
   const formData = new FormData()
   formData.append('caption', payload.caption)
-  formData.append('location', 'Venezuela')
+  formData.append('location', (typeof payload.location === 'string' && payload.location.trim()) || 'Venezuela')
   formData.append('alsoStory', payload.alsoStory ? 'true' : 'false')
 
   if (payload.mediaFile) {
