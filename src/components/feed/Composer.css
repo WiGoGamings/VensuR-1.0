@@ -217,6 +217,24 @@
   font-weight: 700;
 }
 
+.composer-file-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.composer-edit-photo-btn {
+  border: 1px solid #7f6324;
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: linear-gradient(180deg, #f2b705, #e6a700);
+  color: #2a1f00;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
 .composer-submit {
   border: 1px solid #7f6324;
   border-radius: 10px;

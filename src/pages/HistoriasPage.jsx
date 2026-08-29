@@ -13,10 +13,22 @@ const STORY_DURATION_OPTIONS = [
 
 const STORY_FILTER_CSS_BY_NAME = {
   none: 'none',
+  normal: 'none',
   warm: 'sepia(0.28) saturate(1.12) contrast(1.03)',
   cold: 'hue-rotate(170deg) saturate(0.92) brightness(1.02)',
   mono: 'grayscale(1)',
   dramatic: 'contrast(1.2) saturate(1.06) brightness(0.96)',
+  clarendon: 'contrast(1.15) saturate(1.35) brightness(1.05)',
+  gingham: 'sepia(0.12) contrast(0.9) brightness(1.08)',
+  moon: 'grayscale(1) contrast(1.1) brightness(1.1)',
+  lark: 'saturate(1.2) brightness(1.08) contrast(0.95)',
+  reyes: 'sepia(0.35) contrast(0.85) brightness(1.1) saturate(0.9)',
+  juno: 'saturate(1.4) contrast(1.05) sepia(0.1) hue-rotate(-8deg)',
+  slumber: 'saturate(0.66) brightness(1.05) sepia(0.2)',
+  crema: 'sepia(0.2) contrast(1.05) brightness(1.02) saturate(0.9)',
+  ludwig: 'saturate(1.1) contrast(1.05) brightness(1.05) sepia(0.08)',
+  aden: 'hue-rotate(-15deg) contrast(0.9) saturate(0.85) brightness(1.1)',
+  perpetua: 'contrast(1.05) brightness(1.05) saturate(1.1) hue-rotate(5deg)',
 }
 
 function readSavedDuration() {

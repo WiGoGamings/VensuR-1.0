@@ -469,7 +469,13 @@ const BOT_ACTIVITY_PRESETS = {
 const LIVE_STREAM_MAX_DURATION_MS = 4 * 60 * 60 * 1000
 const LIVE_STREAM_PENDING_OFFER_TTL_MS = 90_000
 const LIVE_STREAM_IDLE_VIEWER_TTL_MS = 12 * 60 * 1000
-const STORY_FILTER_NAMES = new Set(['none', 'warm', 'cold', 'mono', 'dramatic'])
+const STORY_FILTER_NAMES = new Set([
+  // Legado
+  'none', 'warm', 'cold', 'mono', 'dramatic',
+  // Presets tipo Instagram (usados por el editor visual de historias en video)
+  'normal', 'clarendon', 'gingham', 'moon', 'lark', 'reyes', 'juno',
+  'slumber', 'crema', 'ludwig', 'aden', 'perpetua',
+])
 
 const MUSIC_LIBRARY_SEED = [
   { id: 'track-amanecer-andino', title: 'Amanecer Andino', artist: 'Archivo VensuR', genre: 'Ambient', mood: 'Merida', durationSec: 34, toneHz: 174 },

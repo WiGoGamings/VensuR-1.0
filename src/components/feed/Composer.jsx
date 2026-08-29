@@ -8,51 +8,20 @@ import {
   stopLiveSession,
   submitLiveViewerAnswer,
 } from '../../services/liveApi'
-import { getMusicLibrary } from '../../services/musicApi'
 import { createPost } from '../../services/postsApi'
 import { createStory } from '../../services/storiesApi'
+import StoryStudio from '../composer/StoryStudio'
 
 const LIVE_STUN_CONFIG = {
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
 }
 const LIVE_OFFERS_POLL_INTERVAL_MS = 1100
 const ICE_GATHERING_TIMEOUT_MS = 3500
-const STORY_FILTER_CSS_BY_NAME = {
-  none: 'none',
-  warm: 'sepia(0.28) saturate(1.12) contrast(1.03)',
-  cold: 'hue-rotate(170deg) saturate(0.92) brightness(1.02)',
-  mono: 'grayscale(1)',
-  dramatic: 'contrast(1.2) saturate(1.06) brightness(0.96)',
-}
 
-function clampNumber(value, min, max, fallback) {
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed)) return fallback
-  return Math.max(min, Math.min(max, parsed))
-}
-
-function normalizeHexColor(value) {
-  const raw = typeof value === 'string' ? value.trim() : ''
-  return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(raw) ? raw : '#ffffff'
-}
-
-function normalizeStoryEditorState(editor) {
-  const source = editor && typeof editor === 'object' ? editor : {}
-
-  return {
-    overlayText: typeof source.overlayText === 'string' ? source.overlayText.slice(0, 180) : '',
-    locationTag: typeof source.locationTag === 'string' ? source.locationTag.slice(0, 42) : '',
-    showClock: Boolean(source.showClock),
-    textColor: normalizeHexColor(source.textColor),
-    textSize: clampNumber(source.textSize, 18, 58, 34),
-    textPositionY: clampNumber(source.textPositionY, 10, 86, 72),
-    textAlign: ['left', 'center', 'right'].includes(source.textAlign) ? source.textAlign : 'center',
-    filter: STORY_FILTER_CSS_BY_NAME[source.filter] ? source.filter : 'none',
-  }
-}
-
-function resolveStoryFilterCss(filterName) {
-  return STORY_FILTER_CSS_BY_NAME[filterName] || STORY_FILTER_CSS_BY_NAME.none
+function isImageFile(file) {
+  const type = typeof file?.type === 'string' ? file.type : ''
+  if (type.startsWith('image/')) return true
+  return /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif)$/i.test(file?.name || '')
 }
 
 function waitForIceGatheringComplete(peerConnection, timeoutMs = ICE_GATHERING_TIMEOUT_MS) {
@@ -90,16 +59,9 @@ export default function Composer({ isAuthenticated, onPostCreated }) {
   const { user } = useAuth()
   const [composerType, setComposerType] = useState('')
   const [isComposerModalOpen, setIsComposerModalOpen] = useState(false)
+  const [isStoryStudioOpen, setIsStoryStudioOpen] = useState(false)
+  const [postEditorFile, setPostEditorFile] = useState(null)
 
-  const [storyDraft, setStoryDraft] = useState({ title: '', description: '' })
-  const [storyFile, setStoryFile] = useState(null)
-  const [storyPreviewUrl, setStoryPreviewUrl] = useState('')
-  const [storyEditor, setStoryEditor] = useState(() => normalizeStoryEditorState({}))
-  const [musicTracks, setMusicTracks] = useState([])
-  const [musicSearch, setMusicSearch] = useState('')
-  const [selectedMusicTrackId, setSelectedMusicTrackId] = useState('')
-  const [isMusicLoading, setIsMusicLoading] = useState(false)
-  const [musicError, setMusicError] = useState('')
   const [postDraft, setPostDraft] = useState('')
   const [postFile, setPostFile] = useState(null)
 
@@ -109,7 +71,6 @@ export default function Composer({ isAuthenticated, onPostCreated }) {
 
   const cameraVideoRef = useRef(null)
   const cameraStreamRef = useRef(null)
-  const storyPreviewUrlRef = useRef('')
   const [cameraTarget, setCameraTarget] = useState('')
   const [isCameraModalOpen, setIsCameraModalOpen] = useState(false)
   const [cameraConsentAccepted, setCameraConsentAccepted] = useState(false)
@@ -143,21 +104,6 @@ export default function Composer({ isAuthenticated, onPostCreated }) {
   const [liveError, setLiveError] = useState('')
   const [liveSharePath, setLiveSharePath] = useState('/vivo')
 
-  const selectedMusicTrack = useMemo(() => {
-    return musicTracks.find((item) => item.id === selectedMusicTrackId) || null
-  }, [musicTracks, selectedMusicTrackId])
-
-  const storyPreviewClock = new Intl.DateTimeFormat('es-VE', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(new Date())
-
-  const storyFileType = typeof storyFile?.type === 'string' ? storyFile.type : ''
-  const isStoryVideoFile = storyFileType.startsWith('video/')
-  const isStoryAudioFile = storyFileType.startsWith('audio/')
-  const storyMediaFilter = resolveStoryFilterCss(storyEditor.filter)
-
   const avatarText = useMemo(() => {
     const source = user?.displayName || user?.username || 'VR'
     return source.slice(0, 2).toUpperCase()
@@ -178,14 +124,6 @@ export default function Composer({ isAuthenticated, onPostCreated }) {
       }
     }
   }, [cameraCapturedUrl])
-
-  useEffect(() => {
-    return () => {
-      if (storyPreviewUrlRef.current) {
-        URL.revokeObjectURL(storyPreviewUrlRef.current)
-      }
-    }
-  }, [])
 
   useEffect(() => {
       const livePreviewVideoNode = livePreviewVideoRef.current
@@ -253,24 +191,6 @@ export default function Composer({ isAuthenticated, onPostCreated }) {
 
     setCameraCapturedUrl('')
     setCameraCapturedFile(null)
-  }
-
-  const setStoryMediaFile = (file) => {
-    if (storyPreviewUrlRef.current) {
-      URL.revokeObjectURL(storyPreviewUrlRef.current)
-      storyPreviewUrlRef.current = ''
-    }
-
-    setStoryFile(file)
-
-    if (!file) {
-      setStoryPreviewUrl('')
-      return
-    }
-
-    const previewUrl = URL.createObjectURL(file)
-    storyPreviewUrlRef.current = previewUrl
-    setStoryPreviewUrl(previewUrl)
   }
 
   const closeCameraModal = () => {
@@ -376,39 +296,6 @@ export default function Composer({ isAuthenticated, onPostCreated }) {
     }
   }
 
-  const resetStoryStudioState = () => {
-    setStoryDraft({ title: '', description: '' })
-    setStoryMediaFile(null)
-    setStoryEditor(normalizeStoryEditorState({}))
-    setSelectedMusicTrackId('')
-    setMusicSearch('')
-    setMusicTracks([])
-    setMusicError('')
-  }
-
-  const loadMusicTracks = async (query = '') => {
-    const searchQuery = typeof query === 'string' ? query.trim() : ''
-
-    setIsMusicLoading(true)
-    setMusicError('')
-
-    try {
-      const payload = await getMusicLibrary({ query: searchQuery, limit: 60 })
-      const items = Array.isArray(payload?.items) ? payload.items : []
-
-      setMusicTracks(items)
-
-      if (!items.some((item) => item.id === selectedMusicTrackId)) {
-        setSelectedMusicTrackId('')
-      }
-    } catch (error) {
-      setMusicError(error instanceof Error ? error.message : 'No se pudo cargar la biblioteca musical.')
-      setMusicTracks([])
-    } finally {
-      setIsMusicLoading(false)
-    }
-  }
-
   const closeComposerModal = () => {
     if (composerType === 'live' && isLiveActive) {
       setLiveError('Primero debes detener el en vivo para cerrar este panel.')
@@ -417,10 +304,6 @@ export default function Composer({ isAuthenticated, onPostCreated }) {
 
     if (composerType === 'live') {
       resetLiveStudioState()
-    }
-
-    if (composerType === 'story') {
-      resetStoryStudioState()
     }
 
     setIsComposerModalOpen(false)
@@ -434,18 +317,19 @@ export default function Composer({ isAuthenticated, onPostCreated }) {
       return
     }
 
-    setComposerType(type)
     setComposerError('')
     setComposerStatus('')
+
+    if (type === 'story') {
+      setIsStoryStudioOpen(true)
+      return
+    }
+
+    setComposerType(type)
     setIsComposerModalOpen(true)
 
     if (type === 'live') {
       resetLiveStudioState()
-    }
-
-    if (type === 'story') {
-      resetStoryStudioState()
-      void loadMusicTracks('')
     }
   }
 
@@ -573,69 +457,35 @@ export default function Composer({ isAuthenticated, onPostCreated }) {
       return
     }
 
-    if (cameraTarget === 'story') {
-      setStoryMediaFile(cameraCapturedFile)
-    } else {
-      setPostFile(cameraCapturedFile)
-    }
-
+    setPostFile(cameraCapturedFile)
     setComposerError('')
     setComposerStatus('Foto guardada y lista para subir.')
     closeCameraModal()
   }
 
-  const onStorySubmit = async (event) => {
-    event.preventDefault()
-
-    const title = storyDraft.title.trim()
-    if (!title) {
-      setComposerError('Agrega un titulo para la historia.')
-      return
-    }
-
-    setIsSubmitting(true)
-    setComposerError('')
-
+  const publishStoryFromStudio = async ({ mediaFile, title, description, metadata }) => {
     try {
-      const metadata = {
-        editor: {
-          ...storyEditor,
-          overlayText: storyEditor.overlayText.trim(),
-          locationTag: storyEditor.locationTag.trim(),
-          clockLabel: storyEditor.showClock ? storyPreviewClock : '',
-        },
-        music: selectedMusicTrack
-          ? {
-              trackId: selectedMusicTrack.id,
-              startSeconds: 0,
-              volume: 0.82,
-            }
-          : null,
-      }
-
       const response = await createStory({
-        title,
-        description: storyDraft.description.trim(),
-        mediaFile: storyFile,
+        title: title || 'Historia',
+        description: description || '',
+        mediaFile,
         metadata,
       })
+      if (!response?.story) return false
 
-      if (!response?.story) {
-        setComposerError('No se pudo crear la historia en este momento.')
-        return
-      }
-
-      setStoryDraft({ title: '', description: '' })
-        setStoryMediaFile(null)
-        setStoryEditor(normalizeStoryEditorState({}))
-        setSelectedMusicTrackId('')
-      setComposerStatus('Historia creada desde Inicio correctamente.')
-      closeComposerModal()
-    } catch (error) {
-      setComposerError(error instanceof Error ? error.message : 'No se pudo crear la historia.')
-    } finally {
-      setIsSubmitting(false)
+      setComposerStatus('Historia publicada correctamente.')
+      return true
+    } catch {
+      return false
     }
+  }
+
+  const publishEditedPostPhoto = async ({ mediaFile }) => {
+    if (!mediaFile) return false
+    setPostFile(mediaFile)
+    setPostEditorFile(null)
+    setComposerStatus('Foto editada y lista para publicar.')
+    return true
   }
 
   const onPostSubmit = async (event) => {
@@ -988,344 +838,12 @@ export default function Composer({ isAuthenticated, onPostCreated }) {
         >
           <article className="composer-create-modal panel">
             <header className="composer-create-head">
-              <h2>
-                {composerType === 'story'
-                  ? 'Crear historia'
-                  : composerType === 'live'
-                    ? 'Configurar en vivo'
-                    : 'Crear publicacion'}
-              </h2>
+              <h2>{composerType === 'live' ? 'Configurar en vivo' : 'Crear publicacion'}</h2>
               <button className="composer-create-close" onClick={closeComposerModal} type="button">
                 Cerrar
               </button>
             </header>
 
-            {composerType === 'story' ? (
-              <form className="composer-create-form composer-story-form" onSubmit={onStorySubmit}>
-                <div className="composer-story-layout">
-                  <div className="composer-story-main">
-                    <label>
-                      Titulo
-                      <input
-                        onChange={(event) =>
-                          setStoryDraft((current) => ({ ...current, title: event.target.value }))
-                        }
-                        placeholder="Ej: Reporte desde mi comunidad"
-                        value={storyDraft.title}
-                      />
-                    </label>
-
-                    <label>
-                      Descripcion
-                      <textarea
-                        onChange={(event) =>
-                          setStoryDraft((current) => ({ ...current, description: event.target.value }))
-                        }
-                        placeholder="Cuenta brevemente el contexto"
-                        value={storyDraft.description}
-                      />
-                    </label>
-
-                    <label className="composer-create-file">
-                      Adjuntar desde galeria (imagen, video o audio)
-                      <input
-                        accept="image/*,video/*,audio/*"
-                        onChange={(event) => setStoryMediaFile(event.target.files?.[0] ?? null)}
-                        type="file"
-                      />
-                    </label>
-
-                    <button className="composer-camera-btn" onClick={() => onOpenCameraCapture('story')} type="button">
-                      Tomar foto desde el dispositivo
-                    </button>
-
-                    {storyFile ? <p className="composer-file-name">Archivo: {storyFile.name}</p> : null}
-
-                    <div className="composer-story-preview" aria-label="Vista previa de historia">
-                      {storyPreviewUrl ? (
-                        isStoryVideoFile ? (
-                          <video
-                            autoPlay
-                            className="composer-story-preview-media"
-                            loop
-                            muted
-                            playsInline
-                            src={storyPreviewUrl}
-                            style={{ filter: storyMediaFilter }}
-                          />
-                        ) : isStoryAudioFile ? (
-                          <div className="composer-story-preview-fallback audio">
-                            <b>Archivo de audio seleccionado</b>
-                            <span>La historia mostrara portada + musica</span>
-                          </div>
-                        ) : (
-                          <img
-                            alt="Vista previa de historia"
-                            className="composer-story-preview-media"
-                            src={storyPreviewUrl}
-                            style={{ filter: storyMediaFilter }}
-                          />
-                        )
-                      ) : (
-                        <div className="composer-story-preview-fallback">
-                          <b>Sube una foto o video para previsualizar</b>
-                          <span>Tambien puedes crear historia solo con texto y musica.</span>
-                        </div>
-                      )}
-
-                      {storyEditor.overlayText ? (
-                        <div
-                          className={`composer-story-overlay align-${storyEditor.textAlign}`}
-                          style={{
-                            color: storyEditor.textColor,
-                            fontSize: `${storyEditor.textSize}px`,
-                            top: `${storyEditor.textPositionY}%`,
-                          }}
-                        >
-                          {storyEditor.overlayText}
-                        </div>
-                      ) : null}
-
-                      {storyEditor.locationTag ? (
-                        <span className="composer-story-chip location">📍 {storyEditor.locationTag}</span>
-                      ) : null}
-
-                      {storyEditor.showClock ? (
-                        <span className="composer-story-chip clock">🕒 {storyPreviewClock}</span>
-                      ) : null}
-
-                      {selectedMusicTrack ? (
-                        <span className="composer-story-chip music">
-                          ♪ {selectedMusicTrack.title}
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <aside className="composer-story-editor panel">
-                    <h3>Editar historia</h3>
-
-                    <label>
-                      Texto principal
-                      <textarea
-                        onChange={(event) =>
-                          setStoryEditor((current) => ({
-                            ...current,
-                            overlayText: event.target.value,
-                          }))
-                        }
-                        placeholder="Escribe el texto sobre la historia"
-                        value={storyEditor.overlayText}
-                      />
-                    </label>
-
-                    <div className="composer-story-inline">
-                      <label>
-                        Color
-                        <input
-                          onChange={(event) =>
-                            setStoryEditor((current) => ({
-                              ...current,
-                              textColor: normalizeHexColor(event.target.value),
-                            }))
-                          }
-                          type="color"
-                          value={storyEditor.textColor}
-                        />
-                      </label>
-
-                      <label>
-                        Tamano
-                        <input
-                          max="58"
-                          min="18"
-                          onChange={(event) =>
-                            setStoryEditor((current) => ({
-                              ...current,
-                              textSize: clampNumber(event.target.value, 18, 58, 34),
-                            }))
-                          }
-                          type="range"
-                          value={storyEditor.textSize}
-                        />
-                      </label>
-                    </div>
-
-                    <label>
-                      Posicion vertical del texto
-                      <input
-                        max="86"
-                        min="10"
-                        onChange={(event) =>
-                          setStoryEditor((current) => ({
-                            ...current,
-                            textPositionY: clampNumber(event.target.value, 10, 86, 72),
-                          }))
-                        }
-                        type="range"
-                        value={storyEditor.textPositionY}
-                      />
-                    </label>
-
-                    <label>
-                      Alineacion del texto
-                      <select
-                        onChange={(event) =>
-                          setStoryEditor((current) => ({
-                            ...current,
-                            textAlign: ['left', 'center', 'right'].includes(event.target.value)
-                              ? event.target.value
-                              : 'center',
-                          }))
-                        }
-                        value={storyEditor.textAlign}
-                      >
-                        <option value="left">Izquierda</option>
-                        <option value="center">Centro</option>
-                        <option value="right">Derecha</option>
-                      </select>
-                    </label>
-
-                    <label>
-                      Filtro visual
-                      <select
-                        onChange={(event) =>
-                          setStoryEditor((current) => ({
-                            ...current,
-                            filter: STORY_FILTER_CSS_BY_NAME[event.target.value]
-                              ? event.target.value
-                              : 'none',
-                          }))
-                        }
-                        value={storyEditor.filter}
-                      >
-                        <option value="none">Sin filtro</option>
-                        <option value="warm">Calido</option>
-                        <option value="cold">Frio</option>
-                        <option value="mono">Blanco y negro</option>
-                        <option value="dramatic">Dramatico</option>
-                      </select>
-                    </label>
-
-                    <label>
-                      Etiqueta de lugar
-                      <input
-                        maxLength={42}
-                        onChange={(event) =>
-                          setStoryEditor((current) => ({
-                            ...current,
-                            locationTag: event.target.value,
-                          }))
-                        }
-                        placeholder="Ej: Caracas, La Candelaria"
-                        value={storyEditor.locationTag}
-                      />
-                    </label>
-
-                    <label className="composer-story-switch">
-                      <input
-                        checked={storyEditor.showClock}
-                        onChange={(event) =>
-                          setStoryEditor((current) => ({
-                            ...current,
-                            showClock: event.target.checked,
-                          }))
-                        }
-                        type="checkbox"
-                      />
-                      Mostrar hora en la historia
-                    </label>
-                  </aside>
-                </div>
-
-                <section className="composer-music-library panel" aria-label="Biblioteca de musica">
-                  <header>
-                    <h3>Agregar musica</h3>
-                    <small>Catalogo guardado en la base de datos</small>
-                  </header>
-
-                  <div className="composer-music-search">
-                    <input
-                      onChange={(event) => setMusicSearch(event.target.value)}
-                      placeholder="Busca por titulo, artista, genero o estado"
-                      value={musicSearch}
-                    />
-                    <button
-                      className="composer-submit secondary"
-                      onClick={() => {
-                        void loadMusicTracks(musicSearch)
-                      }}
-                      type="button"
-                    >
-                      Buscar
-                    </button>
-                    <button
-                      className="composer-submit secondary"
-                      onClick={() => {
-                        setMusicSearch('')
-                        void loadMusicTracks('')
-                      }}
-                      type="button"
-                    >
-                      Limpiar
-                    </button>
-                  </div>
-
-                  {musicError ? <p className="composer-feedback error">{musicError}</p> : null}
-                  {isMusicLoading ? <p className="composer-feedback">Cargando biblioteca musical...</p> : null}
-
-                  {!isMusicLoading ? (
-                    <div className="composer-music-list" role="list">
-                      {musicTracks.map((track) => {
-                        const isSelected = selectedMusicTrackId === track.id
-                        const trackSubtitle = [track.artist, track.genre, track.mood].filter(Boolean).join(' · ')
-
-                        return (
-                          <article className={`composer-music-item ${isSelected ? 'selected' : ''}`} key={track.id} role="listitem">
-                            <div>
-                              <b>{track.title}</b>
-                              <span>{trackSubtitle || 'Musica comunitaria'}</span>
-                              <small>{track.durationSec ? `${track.durationSec}s` : 'Duracion variable'}</small>
-                            </div>
-
-                            <div className="composer-music-actions">
-                              <button
-                                className="composer-submit secondary"
-                                onClick={() =>
-                                  setSelectedMusicTrackId((current) => (current === track.id ? '' : track.id))
-                                }
-                                type="button"
-                              >
-                                {isSelected ? 'Quitar' : 'Elegir'}
-                              </button>
-
-                              {track.previewUrl ? (
-                                <audio controls preload="none" src={track.previewUrl} />
-                              ) : null}
-                            </div>
-                          </article>
-                        )
-                      })}
-
-                      {!musicTracks.length ? (
-                        <p className="composer-feedback">No se encontraron pistas con ese filtro.</p>
-                      ) : null}
-                    </div>
-                  ) : null}
-
-                  {selectedMusicTrack ? (
-                    <p className="composer-feedback success">
-                      Cancion seleccionada: {selectedMusicTrack.title}
-                      {selectedMusicTrack.artist ? ` · ${selectedMusicTrack.artist}` : ''}
-                    </p>
-                  ) : null}
-                </section>
-
-                <button className="composer-submit" disabled={isSubmitting} type="submit">
-                  {isSubmitting ? 'Publicando historia...' : 'Publicar historia'}
-                </button>
-              </form>
-            ) : null}
 
             {composerType === 'post' ? (
               <form className="composer-create-form" onSubmit={onPostSubmit}>
@@ -1351,7 +869,20 @@ export default function Composer({ isAuthenticated, onPostCreated }) {
                   Tomar foto desde el dispositivo
                 </button>
 
-                {postFile ? <p className="composer-file-name">Archivo: {postFile.name}</p> : null}
+                {postFile ? (
+                  <div className="composer-file-row">
+                    <p className="composer-file-name">Archivo: {postFile.name}</p>
+                    {isImageFile(postFile) ? (
+                      <button
+                        className="composer-edit-photo-btn"
+                        onClick={() => setPostEditorFile(postFile)}
+                        type="button"
+                      >
+                        ✨ Editar foto (filtros, texto)
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 <button className="composer-submit" disabled={isSubmitting} type="submit">
                   {isSubmitting ? 'Publicando...' : 'Publicar publicacion'}
@@ -1541,6 +1072,25 @@ export default function Composer({ isAuthenticated, onPostCreated }) {
             ) : null}
           </article>
         </section>
+      ) : null}
+
+      {isStoryStudioOpen ? (
+        <StoryStudio
+          user={user}
+          mode="story"
+          onClose={() => setIsStoryStudioOpen(false)}
+          onPublish={publishStoryFromStudio}
+        />
+      ) : null}
+
+      {postEditorFile ? (
+        <StoryStudio
+          user={user}
+          mode="post"
+          initialFile={postEditorFile}
+          onClose={() => setPostEditorFile(null)}
+          onPublish={publishEditedPostPhoto}
+        />
       ) : null}
     </>
   )
