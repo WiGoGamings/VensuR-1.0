@@ -54,6 +54,9 @@ npm run dev
 - `TRUST_PROXY`: `1`/`true` si la API corre detras de un proxy inverso (para leer bien la IP del cliente).
 - `AUTH_RATE_LIMIT_WINDOW_MS` / `AUTH_RATE_LIMIT_MAX`: ventana y maximo de peticiones a `/api/auth/*` por IP (por defecto 40 cada 15 min).
 - `BOTS_ENABLED`: `true`/`false`. Por defecto activos fuera de produccion.
+- `MAIL_TRANSPORT`: `console` (default, imprime el codigo), `file` (guarda en `server/outbox/`) o `smtp`.
+- `MAIL_FROM`: remitente de los correos.
+- SMTP (con `MAIL_TRANSPORT=smtp`, requiere `npm i nodemailer`): `SMTP_URL` o `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS`.
 - `VITE_API_BASE_URL`: opcional; en dev no hace falta porque Vite ya hace proxy.
 - `GOOGLE_CLIENT_ID`: Client ID OAuth de Google (backend). **No se usa el client secret**; solo se valida el `idToken`.
 - `APPLE_CLIENT_ID`: Service ID de Apple Sign In (backend).

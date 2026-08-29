@@ -15,6 +15,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, writeFile
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { sendVerificationEmail } from './lib/mailer.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -3091,13 +3092,26 @@ async function issueVerificationCode(user) {
   const code = generateVerificationCode()
   issueVerificationCodeTx(user.id, hashVerificationCode(code))
 
-  // En local/development mostramos el codigo para poder probar sin proveedor SMTP.
+  let sent = false
+
+  try {
+    const result = await sendVerificationEmail(
+      { email: user.email, displayName: user.display_name },
+      code,
+    )
+    sent = Boolean(result?.delivered)
+  } catch (error) {
+    // El fallo de envio no debe romper el registro: el usuario puede pedir reenvio.
+    console.error(`[VERIFICACION] No se pudo enviar el correo a ${user.email}:`, error?.message || error)
+  }
+
+  // En local/development exponemos el codigo para poder probar sin proveedor SMTP real.
   if (EXPOSE_DEV_VERIFICATION_CODE) {
     console.log(`[VERIFICACION] ${user.email} -> ${code}`)
   }
 
   return {
-    sent: true,
+    sent,
     debugVerificationCode: EXPOSE_DEV_VERIFICATION_CODE ? code : undefined,
   }
 }

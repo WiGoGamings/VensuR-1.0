@@ -16,6 +16,7 @@ dist-ssr
 !.env.example
 server/data/
 server/uploads/
+server/outbox/
 server/*.db
 server/*.sqlite
 server/*.sqlite3
