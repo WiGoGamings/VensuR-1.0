@@ -20,14 +20,25 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 const DATA_DIR = path.join(__dirname, 'data')
-const UPLOADS_DIR = path.join(__dirname, 'uploads')
+const UPLOADS_DIR = safeString(process.env.UPLOADS_DIR) || path.join(__dirname, 'uploads')
 const PUBLIC_DIR = path.join(__dirname, '..', 'public')
-const DB_PATH = path.join(DATA_DIR, 'vensur.db')
+const DB_PATH = safeString(process.env.DB_PATH) || path.join(DATA_DIR, 'vensur.db')
 const PUBLIC_MEDIA_FILE_PREFIX = 'public-seed-'
 
+const IS_PRODUCTION = process.env.NODE_ENV === 'production'
 const AUTH_JWT_SECRET = process.env.AUTH_JWT_SECRET ?? 'vensur-dev-secret-change-me'
+
+if (IS_PRODUCTION && (!process.env.AUTH_JWT_SECRET || AUTH_JWT_SECRET.length < 24)) {
+  throw new Error('AUTH_JWT_SECRET debe definirse con un valor fuerte (>=24 caracteres) en produccion.')
+}
+
 const AUTH_JWT_EXPIRES_IN = process.env.AUTH_JWT_EXPIRES_IN ?? '7d'
 const API_PORT = Number.parseInt(process.env.API_PORT ?? '8787', 10) || 8787
+const TRUST_PROXY = safeString(process.env.TRUST_PROXY)
+const ALLOWED_ORIGINS = safeString(process.env.ALLOWED_ORIGINS)
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean)
 const BOT_USER_COUNT_MAX = 500
 const BOT_USER_COUNT_DEFAULT = 200
 const BOTS_ENABLED = String(process.env.BOTS_ENABLED ?? process.env.NODE_ENV !== 'production')
@@ -476,6 +487,7 @@ const liveRuntime = {
 
 mkdirSync(DATA_DIR, { recursive: true })
 mkdirSync(UPLOADS_DIR, { recursive: true })
+mkdirSync(path.dirname(DB_PATH), { recursive: true })
 
 const db = new Database(DB_PATH)
 db.pragma('journal_mode = WAL')
@@ -606,6 +618,24 @@ function runMigrations() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS post_reactions (
+      post_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (post_id, user_id),
+      FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS story_reactions (
+      story_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (story_id, user_id),
+      FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS email_verification_codes (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -621,6 +651,8 @@ function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_post_comments_post_created_at ON post_comments(post_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_post_comments_user_created_at ON post_comments(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_post_reactions_user ON post_reactions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_story_reactions_user ON story_reactions(user_id);
     CREATE INDEX IF NOT EXISTS idx_stories_user_created_at ON stories(user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_live_streams_owner_status ON live_streams(owner_user_id, status, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_live_streams_status_started ON live_streams(status, started_at DESC);
@@ -924,6 +956,38 @@ const updatePostReactionsStmt = db.prepare(`
   END,
   updated_at = ?
   WHERE id = ?
+`)
+
+const selectPostReactionStmt = db.prepare(`
+  SELECT 1 FROM post_reactions WHERE post_id = ? AND user_id = ? LIMIT 1
+`)
+
+const insertPostReactionStmt = db.prepare(`
+  INSERT OR IGNORE INTO post_reactions (post_id, user_id, created_at) VALUES (?, ?, ?)
+`)
+
+const deletePostReactionStmt = db.prepare(`
+  DELETE FROM post_reactions WHERE post_id = ? AND user_id = ?
+`)
+
+const selectLikedPostIdsByUserStmt = db.prepare(`
+  SELECT post_id FROM post_reactions WHERE user_id = ?
+`)
+
+const selectStoryReactionStmt = db.prepare(`
+  SELECT 1 FROM story_reactions WHERE story_id = ? AND user_id = ? LIMIT 1
+`)
+
+const insertStoryReactionStmt = db.prepare(`
+  INSERT OR IGNORE INTO story_reactions (story_id, user_id, created_at) VALUES (?, ?, ?)
+`)
+
+const deleteStoryReactionStmt = db.prepare(`
+  DELETE FROM story_reactions WHERE story_id = ? AND user_id = ?
+`)
+
+const selectLikedStoryIdsByUserStmt = db.prepare(`
+  SELECT story_id FROM story_reactions WHERE user_id = ?
 `)
 
 const incrementPostCommentsStmt = db.prepare(`
@@ -1595,7 +1659,7 @@ function getMediaLabel(mediaUrl, mediaType) {
   return 'Imagen ciudadana'
 }
 
-function mapPostRow(row) {
+function mapPostRow(row, options = {}) {
   const location = row.location || 'Venezuela'
   const mediaType = row.media_type || ''
   const mediaUrl = row.media_url || ''
@@ -1615,10 +1679,11 @@ function mapPostRow(row) {
     mediaUrl,
     createdAt: row.created_at || nowIso(),
     location,
+    likedByViewer: Boolean(options.likedByViewer),
   }
 }
 
-function mapStoryRow(row) {
+function mapStoryRow(row, options = {}) {
   const metadata = parseStoryMetadataInput(row.metadata_json)
 
   return {
@@ -1634,6 +1699,7 @@ function mapStoryRow(row) {
     expiresAt: row.expires_at,
     editor: metadata?.editor || undefined,
     music: metadata?.music || null,
+    likedByViewer: Boolean(options.likedByViewer),
   }
 }
 
@@ -1855,6 +1921,62 @@ function pickRandom(items) {
   if (!Array.isArray(items) || !items.length) return null
   return items[randomInt(0, items.length)]
 }
+
+function getLikedPostIdSet(userId) {
+  if (!userId) return new Set()
+  return new Set(selectLikedPostIdsByUserStmt.all(userId).map((row) => row.post_id))
+}
+
+function getLikedStoryIdSet(userId) {
+  if (!userId) return new Set()
+  return new Set(selectLikedStoryIdsByUserStmt.all(userId).map((row) => row.story_id))
+}
+
+/**
+ * Aplica una reaccion real (por usuario) de forma idempotente y mantiene el contador visible.
+ * @returns {{ liked: boolean, changed: boolean }}
+ */
+const togglePostReactionTx = db.transaction((postId, userId, intent) => {
+  const alreadyLiked = Boolean(selectPostReactionStmt.get(postId, userId))
+  const now = nowIso()
+
+  // intent > 0 => quiere dar like; intent < 0 => quiere quitar; intent === 0 => alterna.
+  const wantsLike = intent > 0 ? true : intent < 0 ? false : !alreadyLiked
+
+  if (wantsLike && !alreadyLiked) {
+    insertPostReactionStmt.run(postId, userId, now)
+    updatePostReactionsStmt.run(1, 1, now, postId)
+    return { liked: true, changed: true }
+  }
+
+  if (!wantsLike && alreadyLiked) {
+    deletePostReactionStmt.run(postId, userId)
+    updatePostReactionsStmt.run(-1, -1, now, postId)
+    return { liked: false, changed: true }
+  }
+
+  return { liked: alreadyLiked, changed: false }
+})
+
+const toggleStoryReactionTx = db.transaction((storyId, userId, intent) => {
+  const alreadyLiked = Boolean(selectStoryReactionStmt.get(storyId, userId))
+  const now = nowIso()
+  const wantsLike = intent > 0 ? true : intent < 0 ? false : !alreadyLiked
+
+  if (wantsLike && !alreadyLiked) {
+    insertStoryReactionStmt.run(storyId, userId, now)
+    updateStoryReactionsStmt.run(1, 1, storyId)
+    return { liked: true, changed: true }
+  }
+
+  if (!wantsLike && alreadyLiked) {
+    deleteStoryReactionStmt.run(storyId, userId)
+    updateStoryReactionsStmt.run(-1, -1, storyId)
+    return { liked: false, changed: true }
+  }
+
+  return { liked: alreadyLiked, changed: false }
+})
 
 function escapeXml(value) {
   return String(value)
@@ -3231,14 +3353,82 @@ const upload = multer({
 })
 
 const app = express()
+
+if (TRUST_PROXY) {
+  // Permite valores como "1", "true" o una lista de IPs/subredes de proxies de confianza.
+  app.set('trust proxy', TRUST_PROXY === 'true' ? 1 : TRUST_PROXY === 'false' ? false : TRUST_PROXY)
+}
+
 app.use(
   helmet({
-    crossOriginResourcePolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
   }),
 )
-app.use(cors())
+
+const corsOptions = ALLOWED_ORIGINS.length
+  ? {
+      origin(origin, callback) {
+        // Peticiones sin Origin (curl, apps nativas, same-origin) se permiten.
+        if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+          callback(null, true)
+          return
+        }
+
+        callback(new Error('Origen no permitido por CORS.'))
+      },
+      credentials: true,
+    }
+  : {}
+
+app.use(cors(corsOptions))
 app.use(express.json({ limit: '2mb' }))
 app.use('/uploads', express.static(UPLOADS_DIR))
+
+/**
+ * Limitador de peticiones en memoria (sin dependencias externas).
+ * Suficiente para una sola instancia; en multi-instancia usar un store compartido.
+ */
+function createRateLimiter({ windowMs, max, message }) {
+  const hits = new Map()
+
+  const sweep = setInterval(() => {
+    const now = Date.now()
+    for (const [key, entry] of hits.entries()) {
+      if (now > entry.resetAt) hits.delete(key)
+    }
+  }, Math.max(windowMs, 30_000))
+
+  if (typeof sweep.unref === 'function') sweep.unref()
+
+  return function rateLimiter(req, res, next) {
+    const key = req.ip || req.socket?.remoteAddress || 'unknown'
+    const now = Date.now()
+    const entry = hits.get(key)
+
+    if (!entry || now > entry.resetAt) {
+      hits.set(key, { count: 1, resetAt: now + windowMs })
+      next()
+      return
+    }
+
+    entry.count += 1
+
+    if (entry.count > max) {
+      const retryAfterSec = Math.max(1, Math.ceil((entry.resetAt - now) / 1000))
+      res.setHeader('Retry-After', String(retryAfterSec))
+      sendError(res, 429, message || 'Demasiadas solicitudes. Intenta mas tarde.')
+      return
+    }
+
+    next()
+  }
+}
+
+const authRateLimiter = createRateLimiter({
+  windowMs: Number.parseInt(process.env.AUTH_RATE_LIMIT_WINDOW_MS ?? '', 10) || 15 * 60 * 1000,
+  max: Number.parseInt(process.env.AUTH_RATE_LIMIT_MAX ?? '', 10) || 40,
+  message: 'Demasiados intentos de autenticacion. Espera unos minutos e intenta de nuevo.',
+})
 
 function requireAuth(req, res, next) {
   const authorization = typeof req.headers.authorization === 'string' ? req.headers.authorization : ''
@@ -3349,7 +3539,7 @@ app.get('/api/auth/providers', (req, res) => {
   })
 })
 
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', authRateLimiter, async (req, res) => {
   const email = normalizeEmail(req.body?.email)
   const username = normalizeUsername(req.body?.username)
   const displayName = cleanDisplayName(req.body?.displayName) || username
@@ -3416,7 +3606,7 @@ app.post('/api/auth/register', async (req, res) => {
   })
 })
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authRateLimiter, async (req, res) => {
   const identifier = normalizeEmail(req.body?.identifier)
   const password = safeString(req.body?.password)
 
@@ -3463,7 +3653,7 @@ app.post('/api/auth/login', async (req, res) => {
   })
 })
 
-app.post('/api/auth/verify-email', (req, res) => {
+app.post('/api/auth/verify-email', authRateLimiter, (req, res) => {
   const email = normalizeEmail(req.body?.email)
   const code = normalizeVerificationCode(req.body?.code)
 
@@ -3531,7 +3721,7 @@ app.post('/api/auth/verify-email', (req, res) => {
   })
 })
 
-app.post('/api/auth/resend-verification', async (req, res) => {
+app.post('/api/auth/resend-verification', authRateLimiter, async (req, res) => {
   const email = normalizeEmail(req.body?.email)
 
   if (!email) {
@@ -3565,7 +3755,7 @@ app.post('/api/auth/resend-verification', async (req, res) => {
   })
 })
 
-app.post('/api/auth/oauth/google', async (req, res) => {
+app.post('/api/auth/oauth/google', authRateLimiter, async (req, res) => {
   const idToken = safeString(req.body?.idToken || req.body?.credential)
   if (!idToken) {
     sendError(res, 400, 'No recibimos el token de Google.')
@@ -3588,7 +3778,7 @@ app.post('/api/auth/oauth/google', async (req, res) => {
   }
 })
 
-app.post('/api/auth/oauth/apple', async (req, res) => {
+app.post('/api/auth/oauth/apple', authRateLimiter, async (req, res) => {
   const idToken = safeString(req.body?.idToken)
   const firstName = safeString(req.body?.firstName)
   const lastName = safeString(req.body?.lastName)
@@ -4375,12 +4565,13 @@ app.get('/api/content/users/:username', (req, res) => {
 app.get('/api/content/posts', (req, res) => {
   const viewer = resolveOptionalAuthUser(req)
   const viewerUserId = viewer?.id || ''
+  const likedPostIds = getLikedPostIdSet(viewerUserId)
   const rows = selectPostsStmt
     .all()
     .filter((row) => canViewerAccessUserContent(viewerUserId, row.user_id, row.profile_visibility))
 
   res.json({
-    items: rows.map(mapPostRow),
+    items: rows.map((row) => mapPostRow(row, { likedByViewer: likedPostIds.has(row.id) })),
   })
 })
 
@@ -4443,9 +4634,10 @@ app.post('/api/content/posts/:postId/comments', requireAuth, (req, res) => {
   }
 
   const updatedPost = selectPostByIdStmt.get(postId)
+  const likedByViewer = Boolean(selectPostReactionStmt.get(postId, req.authUser.id))
   res.status(201).json({
     comment,
-    post: updatedPost ? mapPostRow(updatedPost) : null,
+    post: updatedPost ? mapPostRow(updatedPost, { likedByViewer }) : null,
   })
 })
 
@@ -4499,12 +4691,13 @@ app.post('/api/content/me/posts', requireAuth, upload.single('media'), (req, res
   })
 })
 
-app.patch('/api/content/posts/:postId/reaction', (req, res) => {
+app.patch('/api/content/posts/:postId/reaction', requireAuth, (req, res) => {
   const postId = safeString(req.params?.postId)
   const rawDelta = Number(req.body?.delta)
-  const delta = Number.isFinite(rawDelta) ? Math.max(-1, Math.min(1, Math.trunc(rawDelta))) : 0
+  // delta define la intencion (1 = like, -1 = quitar). Si no se envia, alterna.
+  const intent = Number.isFinite(rawDelta) ? Math.max(-1, Math.min(1, Math.trunc(rawDelta))) : 0
 
-  if (!postId || delta === 0) {
+  if (!postId) {
     sendError(res, 400, 'No se pudo actualizar la reaccion.')
     return
   }
@@ -4515,28 +4708,27 @@ app.patch('/api/content/posts/:postId/reaction', (req, res) => {
     return
   }
 
-  const viewer = resolveOptionalAuthUser(req)
-  const canAccess = canViewerAccessUserContent(viewer?.id || '', post.user_id, post.profile_visibility)
+  const canAccess = canViewerAccessUserContent(req.authUser.id, post.user_id, post.profile_visibility)
   if (!canAccess) {
     sendError(res, 403, 'Este perfil es privado. Solo amigos pueden reaccionar este contenido.')
     return
   }
 
-  updatePostReactionsStmt.run(delta, delta, nowIso(), postId)
-
+  const result = togglePostReactionTx(postId, req.authUser.id, intent)
   const updatedPost = selectPostByIdStmt.get(postId)
 
   res.json({
-    post: updatedPost ? mapPostRow(updatedPost) : null,
+    liked: result.liked,
+    post: updatedPost ? mapPostRow(updatedPost, { likedByViewer: result.liked }) : null,
   })
 })
 
-app.patch('/api/content/stories/:storyId/reaction', (req, res) => {
+app.patch('/api/content/stories/:storyId/reaction', requireAuth, (req, res) => {
   const storyId = safeString(req.params?.storyId)
   const rawDelta = Number(req.body?.delta)
-  const delta = Number.isFinite(rawDelta) ? Math.max(-1, Math.min(1, Math.trunc(rawDelta))) : 0
+  const intent = Number.isFinite(rawDelta) ? Math.max(-1, Math.min(1, Math.trunc(rawDelta))) : 0
 
-  if (!storyId || delta === 0) {
+  if (!storyId) {
     sendError(res, 400, 'No se pudo actualizar la reaccion de la historia.')
     return
   }
@@ -4549,39 +4741,40 @@ app.patch('/api/content/stories/:storyId/reaction', (req, res) => {
 
   const owner = selectUserByIdStmt.get(story.user_id)
   const visibility = owner?.profile_visibility || 'private'
-  const viewer = resolveOptionalAuthUser(req)
-  const canAccess = canViewerAccessUserContent(viewer?.id || '', story.user_id, visibility)
+  const canAccess = canViewerAccessUserContent(req.authUser.id, story.user_id, visibility)
   if (!canAccess) {
     sendError(res, 403, 'Este perfil es privado. Solo amigos pueden reaccionar esta historia.')
     return
   }
 
-  updateStoryReactionsStmt.run(delta, delta, storyId)
-
+  const result = toggleStoryReactionTx(storyId, req.authUser.id, intent)
   const updatedStory = selectStoryByIdStmt.get(storyId)
 
   res.json({
-    story: updatedStory ? mapStoryRow(updatedStory) : null,
+    liked: result.liked,
+    story: updatedStory ? mapStoryRow(updatedStory, { likedByViewer: result.liked }) : null,
   })
 })
 
 app.get('/api/content/stories', (req, res) => {
   const viewer = resolveOptionalAuthUser(req)
   const viewerUserId = viewer?.id || ''
+  const likedStoryIds = getLikedStoryIdSet(viewerUserId)
 
   const rows = selectActiveStoriesStmt
     .all(nowIso())
     .filter((row) => canViewerAccessUserContent(viewerUserId, row.user_id, row.profile_visibility))
   res.json({
-    items: rows.map(mapStoryRow),
+    items: rows.map((row) => mapStoryRow(row, { likedByViewer: likedStoryIds.has(row.id) })),
   })
 })
 
 app.get('/api/content/me/stories', requireAuth, (req, res) => {
   const rows = selectStoriesByOwnerStmt.all(req.authUser.id)
+  const likedStoryIds = getLikedStoryIdSet(req.authUser.id)
 
   res.json({
-    items: rows.map(mapStoryRow),
+    items: rows.map((row) => mapStoryRow(row, { likedByViewer: likedStoryIds.has(row.id) })),
   })
 })
 

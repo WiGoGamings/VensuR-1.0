@@ -37,6 +37,7 @@ function toLegacyPost(apiPost) {
     createdAt: apiPost.createdAt ?? new Date().toISOString(),
     location: apiPost.location ?? 'Venezuela',
     ownerId: apiPost.ownerId ?? '',
+    likedByViewer: Boolean(apiPost.likedByViewer),
   }
 }
 
@@ -89,16 +90,19 @@ export async function createPost(payload) {
 
 /**
  * @param {string | number} postId
- * @param {number} delta
- * @returns {Promise<Post | null>}
+ * @param {number} delta Intencion: 1 = dar like, -1 = quitar.
+ * @returns {Promise<{ post: Post | null, liked: boolean }>}
  */
 export async function updatePostReactions(postId, delta) {
-  const response = await httpRequest(`/api/content/posts/${postId}/reaction`, {
+  const response = await httpRequest(`/api/content/posts/${encodeURIComponent(String(postId))}/reaction`, {
     method: 'PATCH',
     body: { delta },
   })
 
-  return response.post ? toLegacyPost(response.post) : null
+  return {
+    post: response.post ? toLegacyPost(response.post) : null,
+    liked: Boolean(response.liked),
+  }
 }
 
 /**

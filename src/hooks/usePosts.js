@@ -52,6 +52,11 @@ export default function usePosts({ isAuthenticated, enabled = true }) {
         if (!isMounted) return
 
         setPosts(response)
+        setLikedPostIds(
+          isAuthenticated
+            ? response.filter((post) => post.likedByViewer).map((post) => post.id)
+            : [],
+        )
         setErrorMessage('')
       } catch {
         if (!isMounted) return
@@ -76,7 +81,7 @@ export default function usePosts({ isAuthenticated, enabled = true }) {
       isMounted = false
       clearInterval(intervalId)
     }
-  }, [enabled])
+  }, [enabled, isAuthenticated])
 
   const setMediaFile = useCallback((file) => {
     setMediaFileState(file)
@@ -127,6 +132,11 @@ export default function usePosts({ isAuthenticated, enabled = true }) {
   }, [draft, isAuthenticated, mediaFile, publishAsStory])
 
   const toggleLike = useCallback(async (id) => {
+    if (!isAuthenticated) {
+      setErrorMessage('Debes iniciar sesion para reaccionar.')
+      return
+    }
+
     let currentlyLiked = false
 
     setLikedPostIds((current) => {
@@ -139,11 +149,15 @@ export default function usePosts({ isAuthenticated, enabled = true }) {
     const delta = currentlyLiked ? -1 : 1
 
     try {
-      const updatedPost = await updatePostReactions(id, delta)
+      const { post: updatedPost, liked } = await updatePostReactions(id, delta)
       if (!updatedPost) {
         throw new Error('No se pudo actualizar la reaccion')
       }
 
+      setLikedPostIds((current) => {
+        const withoutId = current.filter((item) => item !== id)
+        return liked ? [...withoutId, id] : withoutId
+      })
       setPosts((current) =>
         current.map((post) => (post.id === id ? updatedPost : post)),
       )
@@ -154,7 +168,7 @@ export default function usePosts({ isAuthenticated, enabled = true }) {
       )
       setErrorMessage('No se pudo actualizar la reaccion. Intenta nuevamente.')
     }
-  }, [])
+  }, [isAuthenticated])
 
   return {
     posts,

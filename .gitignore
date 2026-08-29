@@ -20,6 +20,15 @@ server/*.db
 server/*.sqlite
 server/*.sqlite3
 
+# Artefactos de depuracion / pruebas manuales
+body.txt
+headers.txt
+api-dev.log
+coverage/
+
+# Config local de Claude Code (por maquina)
+.claude/settings.local.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

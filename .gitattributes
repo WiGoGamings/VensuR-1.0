@@ -1,0 +1,14 @@
+# Normaliza los finales de linea: LF en el repo, el checkout se adapta al SO.
+* text=auto eol=lf
+
+# Binarios: nunca normalizar.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.svg binary
+*.mp4 binary
+*.webm binary
+*.wav binary
+*.mp3 binary
+*.ico binary

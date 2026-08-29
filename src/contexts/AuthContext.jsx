@@ -275,22 +275,21 @@ export function AuthProvider({ children }) {
       if (user?.id) {
         const storedDraft = readStoredProfileDraft(user.id)
         const payload = buildProfileSavePayload(user, storedDraft)
+        let draftPersisted = true
 
         if (payload) {
+          // Guardado del borrador de perfil en modo best-effort: nunca debe bloquear el logout.
           try {
-            const response = await updateCurrentUser(payload)
-            setUser(response.user)
-          } catch (error) {
-            setAuthError(
-              error instanceof Error
-                ? `No se pudo guardar tu perfil antes de cerrar sesion: ${error.message}`
-                : 'No se pudo guardar tu perfil antes de cerrar sesion.',
-            )
-            return false
+            await updateCurrentUser(payload)
+          } catch {
+            // El borrador se conserva en localStorage para reintentarlo tras volver a entrar.
+            draftPersisted = false
           }
         }
 
-        clearStoredProfileDraft(user.id)
+        if (draftPersisted) {
+          clearStoredProfileDraft(user.id)
+        }
       }
 
       clearSession()

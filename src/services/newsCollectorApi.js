@@ -123,18 +123,13 @@ const TRACKING_QUERY_PARAMS = new Set([
   'utm_term',
 ])
 
+// Solo se usa el proxy propio del backend (/api/rss). Antes habia proxies CORS
+// publicos de terceros (allorigins, cors.isomorphic-git) que enviaban las URLs de
+// las fuentes a servidores externos y eran poco fiables; se eliminaron a proposito.
 const FEED_ENDPOINTS = [
   {
     name: 'proxy_local',
     build: (url) => `/api/rss?url=${encodeURIComponent(url)}`,
-  },
-  {
-    name: 'allorigins',
-    build: (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-  },
-  {
-    name: 'isomorphic',
-    build: (url) => `https://cors.isomorphic-git.org/${url}`,
   },
 ]
 

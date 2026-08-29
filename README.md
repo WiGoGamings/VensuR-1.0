@@ -47,10 +47,15 @@ npm run dev
 
 ## Variables recomendadas
 
-- `AUTH_JWT_SECRET`: secreto JWT para la API.
+- `AUTH_JWT_SECRET`: secreto JWT para la API. **Obligatorio en produccion** (>= 24 caracteres); el servidor no arranca sin el si `NODE_ENV=production`.
 - `API_PORT`: puerto de la API (por defecto `8787`).
+- `DB_PATH` / `UPLOADS_DIR`: rutas opcionales para la BD SQLite y los uploads (utiles en tests/despliegues).
+- `ALLOWED_ORIGINS`: lista separada por comas de origenes permitidos por CORS. Vacio = abierto (solo dev local).
+- `TRUST_PROXY`: `1`/`true` si la API corre detras de un proxy inverso (para leer bien la IP del cliente).
+- `AUTH_RATE_LIMIT_WINDOW_MS` / `AUTH_RATE_LIMIT_MAX`: ventana y maximo de peticiones a `/api/auth/*` por IP (por defecto 40 cada 15 min).
+- `BOTS_ENABLED`: `true`/`false`. Por defecto activos fuera de produccion.
 - `VITE_API_BASE_URL`: opcional; en dev no hace falta porque Vite ya hace proxy.
-- `GOOGLE_CLIENT_ID`: Client ID OAuth de Google (backend).
+- `GOOGLE_CLIENT_ID`: Client ID OAuth de Google (backend). **No se usa el client secret**; solo se valida el `idToken`.
 - `APPLE_CLIENT_ID`: Service ID de Apple Sign In (backend).
 - `VITE_GOOGLE_CLIENT_ID`: Client ID OAuth de Google (frontend).
 - `VITE_APPLE_CLIENT_ID`: Service ID de Apple Sign In (frontend).
@@ -102,3 +107,4 @@ Ambas rutas estan ignoradas por Git.
 - `npm run build`: build de produccion del frontend
 - `npm run preview`: preview del build
 - `npm run lint`: lint del proyecto
+- `npm test`: pruebas de humo de la API (`node --test`, sin dependencias extra)

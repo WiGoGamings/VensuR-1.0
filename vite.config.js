@@ -5,16 +5,23 @@ import { defineConfig } from 'vite'
 const RSS_PROXY_PATH = '/api/rss'
 const RSS_TIMEOUT_MS = 8000
 const API_TARGET = 'http://127.0.0.1:8787'
-const ALLOWED_RSS_HOSTS = new Set([
+// Debe mantenerse alineado con ALLOWED_RSS_HOSTS de server/index.js.
+const ALLOWED_RSS_BASE_HOSTS = [
   'elnacional.com',
-  'www.elnacional.com',
   'efectococuyo.com',
-  'www.efectococuyo.com',
   'talcualdigital.com',
-  'www.talcualdigital.com',
   'runrun.es',
-  'www.runrun.es',
-])
+  'armando.info',
+  'transparencia.org.ve',
+  'provea.org',
+  'foropenal.com',
+]
+
+function isAllowedRssHost(hostname) {
+  return ALLOWED_RSS_BASE_HOSTS.some(
+    (base) => hostname === base || hostname.endsWith(`.${base}`),
+  )
+}
 
 function writeJson(res, statusCode, payload) {
   res.statusCode = statusCode
@@ -28,7 +35,7 @@ function isAllowedRssUrl(rawUrl) {
     const hostname = parsed.hostname.toLowerCase()
 
     if (!['http:', 'https:'].includes(parsed.protocol)) return null
-    if (!ALLOWED_RSS_HOSTS.has(hostname)) return null
+    if (!isAllowedRssHost(hostname)) return null
 
     return parsed.toString()
   } catch {
