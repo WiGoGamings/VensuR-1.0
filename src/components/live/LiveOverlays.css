@@ -1,0 +1,337 @@
+/* ---------- Dock flotante (mientras navegas la app) ---------- */
+.live-dock {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.5);
+}
+
+.live-dock-thumb {
+  position: relative;
+  width: 88px;
+  height: 118px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #000;
+  flex-shrink: 0;
+}
+.live-dock-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+.live-dock-tag {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: var(--red);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+
+.live-dock-info {
+  display: flex;
+  flex-direction: column;
+}
+.live-dock-info b {
+  font-size: 14px;
+}
+.live-dock-info small {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.live-dock-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.live-dock-btn {
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.live-dock-btn.stop {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+
+/* ---------- Monitor (tu vista del propio en vivo) ---------- */
+.live-monitor-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 6, 10, 0.86);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+.live-monitor {
+  width: min(1080px, 100%);
+  max-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  color: var(--text);
+  overflow: hidden;
+}
+@media (min-width: 900px) {
+  .live-monitor {
+    margin: 24px;
+    border-radius: 16px;
+    max-height: calc(100vh - 48px);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+  }
+}
+
+.live-monitor-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.live-monitor-head h2 {
+  margin: 0;
+  font-size: 18px;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.live-monitor-tag,
+.live-monitor-stage-badge {
+  background: var(--red);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 10px;
+  border-radius: 999px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.live-monitor-min {
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.live-monitor-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+@media (max-width: 860px) {
+  .live-monitor-body {
+    flex-direction: column;
+  }
+}
+
+.live-monitor-stage {
+  position: relative;
+  flex: 1;
+  background: #000;
+  display: grid;
+  place-items: center;
+  min-height: 240px;
+}
+.live-monitor-video {
+  width: 100%;
+  height: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+  transform: scaleX(-1);
+}
+.live-monitor-stage-badge {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.live-monitor-side {
+  width: 320px;
+  flex-shrink: 0;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  border-left: 1px solid var(--line);
+  overflow-y: auto;
+}
+@media (max-width: 860px) {
+  .live-monitor-side {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--line);
+  }
+}
+
+.live-monitor-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+.live-monitor-stat b {
+  font-size: 34px;
+  line-height: 1;
+}
+.live-monitor-stat span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.live-monitor-share {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.live-monitor-share > div {
+  display: flex;
+  gap: 6px;
+}
+.live-monitor-share input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--text);
+  background: var(--search-bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 8px;
+}
+.live-monitor-share button {
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.live-monitor-open {
+  color: var(--blue);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.live-monitor-viewers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.live-monitor-viewers ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.live-monitor-viewers li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+.live-monitor-viewer-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--blue);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.live-monitor-viewer-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.live-monitor-viewer-name {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+}
+.live-monitor-viewer-name small {
+  color: var(--muted);
+}
+.live-monitor-empty {
+  margin: 0;
+}
+
+.live-monitor-error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(213, 42, 72, 0.16);
+  color: #ff9db0;
+  font-size: 12px;
+}
+
+.live-monitor-foot {
+  display: flex;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+}
+.live-monitor-btn {
+  flex: 1;
+  border-radius: 10px;
+  padding: 11px 14px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+}
+.live-monitor-btn.ghost {
+  background: none;
+}
+.live-monitor-btn.stop {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+.live-monitor-btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}

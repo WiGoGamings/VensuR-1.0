@@ -3,6 +3,7 @@ import FooterBar from './components/layout/FooterBar'
 import LeftRail from './components/layout/LeftRail'
 import RightRail from './components/layout/RightRail'
 import TopBar from './components/layout/TopBar'
+import LiveOverlays from './components/live/LiveOverlays'
 import { useAuth } from './contexts/AuthContext'
 import useLayoutConfig from './hooks/useLayoutConfig'
 import usePosts from './hooks/usePosts'
@@ -146,6 +147,8 @@ function App() {
       </div>
 
       <FooterBar links={footerLinks} />
+
+      <LiveOverlays />
     </main>
   )
 }
