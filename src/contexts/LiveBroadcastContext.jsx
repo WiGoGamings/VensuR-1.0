@@ -40,7 +40,6 @@ export function LiveBroadcastProvider({ children }) {
   const pollingTimerRef = useRef(null)
   const processingOffersRef = useRef(new Set())
   const sessionIdRef = useRef('')
-  const elapsedTimerRef = useRef(null)
 
   const [stream, setStream] = useState(null)
   const [isCameraReady, setIsCameraReady] = useState(false)
@@ -57,7 +56,6 @@ export function LiveBroadcastProvider({ children }) {
   const [viewerCount, setViewerCount] = useState(0)
   const [viewers, setViewers] = useState([])
   const [startedAt, setStartedAt] = useState(0)
-  const [elapsedSec, setElapsedSec] = useState(0)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
 
@@ -98,10 +96,6 @@ export function LiveBroadcastProvider({ children }) {
       stopPollingInternal()
       closePeersInternal()
       stopStreamInternal()
-      if (elapsedTimerRef.current) {
-        clearInterval(elapsedTimerRef.current)
-        elapsedTimerRef.current = null
-      }
       setIsLive(false)
       setIsPreparing(false)
       setIsStarting(false)
@@ -110,7 +104,6 @@ export function LiveBroadcastProvider({ children }) {
       setViewerCount(0)
       setViewers([])
       setStartedAt(0)
-      setElapsedSec(0)
       setSharePath('/vivo')
       setStatus(statusMessage || '')
     },
@@ -297,14 +290,8 @@ export function LiveBroadcastProvider({ children }) {
         setViewerCount(Math.max(0, Number(session.viewerCount ?? 0) || 0))
         setViewers([])
         setStartedAt(startTs)
-        setElapsedSec(0)
         setIsLive(true)
         setStatus('En vivo. Tus seguidores ya pueden verte.')
-
-        if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current)
-        elapsedTimerRef.current = setInterval(() => {
-          setElapsedSec(Math.floor((Date.now() - startTs) / 1000))
-        }, 1000)
 
         startPolling(createdId)
         setIsStudioOpen(false)
@@ -371,7 +358,6 @@ export function LiveBroadcastProvider({ children }) {
       const id = sessionIdRef.current
       if (id) void stopLiveSession(id).catch(() => {})
       if (pollingTimerRef.current) clearInterval(pollingTimerRef.current)
-      if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current)
       streamRef.current?.getTracks().forEach((track) => track.stop())
       for (const peer of peers.values()) {
         try {
@@ -400,7 +386,6 @@ export function LiveBroadcastProvider({ children }) {
       viewerCount,
       viewers,
       startedAt,
-      elapsedSec,
       status,
       error,
       isStudioOpen,
@@ -418,7 +403,7 @@ export function LiveBroadcastProvider({ children }) {
     }),
     [
       stream, isCameraReady, includeAudio, isPreparing, isStarting, isLive, isStopping,
-      sessionId, sharePath, meta, viewerCount, viewers, startedAt, elapsedSec, status, error,
+      sessionId, sharePath, meta, viewerCount, viewers, startedAt, status, error,
       isStudioOpen, isMonitorOpen, prepareCamera, startBroadcast, stopBroadcast,
       openStudio, closeStudio, openMonitor, closeMonitor, clearError,
     ],
@@ -431,6 +416,27 @@ export function useLiveBroadcast() {
   const context = useContext(LiveBroadcastContext)
   if (!context) throw new Error('useLiveBroadcast debe usarse dentro de LiveBroadcastProvider')
   return context
+}
+
+/**
+ * Cronómetro local: solo re-renderiza el componente que lo usa, no toda la app.
+ * @param {number} startedAt timestamp en ms (0 = sin transmisión)
+ */
+export function useElapsed(startedAt) {
+  const [sec, setSec] = useState(0)
+
+  useEffect(() => {
+    if (!startedAt) return undefined
+    const compute = () => setSec(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)))
+    const raf = requestAnimationFrame(compute)
+    const timer = setInterval(compute, 1000)
+    return () => {
+      cancelAnimationFrame(raf)
+      clearInterval(timer)
+    }
+  }, [startedAt])
+
+  return startedAt ? sec : 0
 }
 
 export function formatElapsed(totalSeconds) {

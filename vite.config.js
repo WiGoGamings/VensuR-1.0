@@ -140,6 +140,22 @@ export default defineConfig({
   preview: {
     proxy: createApiProxyConfig(),
   },
+  build: {
+    target: 'es2020',
+    cssCodeSplit: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('react-router')) return 'router'
+            if (id.includes('react-dom') || id.includes('/react/') || id.includes('scheduler')) return 'react'
+            return 'vendor'
+          }
+          return undefined
+        },
+      },
+    },
+  },
   plugins: [
     rssProxyPlugin(),
     react(),

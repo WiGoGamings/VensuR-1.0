@@ -3,7 +3,6 @@ import FooterBar from './components/layout/FooterBar'
 import LeftRail from './components/layout/LeftRail'
 import RightRail from './components/layout/RightRail'
 import TopBar from './components/layout/TopBar'
-import LiveOverlays from './components/live/LiveOverlays'
 import { useAuth } from './contexts/AuthContext'
 import useLayoutConfig from './hooks/useLayoutConfig'
 import usePosts from './hooks/usePosts'
@@ -20,6 +19,7 @@ const PerfilPage = lazy(() => import('./pages/PerfilPage'))
 const PublicacionPage = lazy(() => import('./pages/PublicacionPage'))
 const UsuarioPage = lazy(() => import('./pages/UsuarioPage'))
 const VivoPage = lazy(() => import('./pages/VivoPage'))
+const LiveOverlays = lazy(() => import('./components/live/LiveOverlays'))
 
 function isPathMatch(pathname, matcher) {
   return pathname === matcher || pathname.startsWith(`${matcher}/`)
@@ -148,7 +148,9 @@ function App() {
 
       <FooterBar links={footerLinks} />
 
-      <LiveOverlays />
+      <Suspense fallback={null}>
+        <LiveOverlays />
+      </Suspense>
     </main>
   )
 }

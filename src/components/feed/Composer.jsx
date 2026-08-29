@@ -1,11 +1,23 @@
 import './Composer.css'
-import { useMemo, useState } from 'react'
+import { Suspense, lazy, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
 import { useLiveBroadcast } from '../../contexts/LiveBroadcastContext'
 import { createStory } from '../../services/storiesApi'
-import StoryStudio from '../composer/StoryStudio'
-import PostComposer from '../composer/PostComposer'
+
+const StoryStudio = lazy(() => import('../composer/StoryStudio'))
+const PostComposer = lazy(() => import('../composer/PostComposer'))
+
+// Precarga silenciosa al acercar el cursor, para que el editor abra al instante.
+const prefetchStory = () => {
+  void import('../composer/StoryStudio')
+}
+const prefetchPost = () => {
+  void import('../composer/PostComposer')
+}
+const prefetchLive = () => {
+  void import('../live/LiveOverlays')
+}
 
 function initialsOf(user) {
   const source = user?.displayName || user?.username || 'VR'
@@ -83,20 +95,26 @@ export default function Composer({ isAuthenticated, onPostCreated }) {
         </div>
 
         <div className="composer-compact-body">
-          <button className="composer-prompt" onClick={() => openCreator('post')} type="button">
+          <button
+            className="composer-prompt"
+            onClick={() => openCreator('post')}
+            onMouseEnter={prefetchPost}
+            type="button"
+          >
             {isAuthenticated ? `Que estas pensando, ${promptName}?` : 'Inicia sesion para crear contenido'}
           </button>
 
           <div className="composer-quick-actions" aria-label="Accesos directos de creacion">
-            <button className="composer-quick-btn story" onClick={() => openCreator('story')} title="Crear historia" type="button">
+            <button className="composer-quick-btn story" onClick={() => openCreator('story')} onMouseEnter={prefetchStory} title="Crear historia" type="button">
               ◉
             </button>
-            <button className="composer-quick-btn post" onClick={() => openCreator('post')} title="Crear publicacion" type="button">
+            <button className="composer-quick-btn post" onClick={() => openCreator('post')} onMouseEnter={prefetchPost} title="Crear publicacion" type="button">
               ▣
             </button>
             <button
               className={`composer-quick-btn live ${isLive ? 'is-live' : ''}`}
               onClick={() => openCreator('live')}
+              onMouseEnter={prefetchLive}
               title={isLive ? 'Ver tu transmisión' : 'Crear en vivo'}
               type="button"
             >
@@ -114,24 +132,28 @@ export default function Composer({ isAuthenticated, onPostCreated }) {
         </p>
       ) : null}
 
-      {isPostComposerOpen ? (
-        <PostComposer
-          user={user}
-          onClose={() => setIsPostComposerOpen(false)}
-          onCreated={(post) => {
-            onPostCreated?.(post)
-            setComposerStatus('Publicación creada correctamente.')
-          }}
-        />
-      ) : null}
+      {isPostComposerOpen || isStoryStudioOpen ? (
+        <Suspense fallback={<div className="composer-loading-overlay">Abriendo el editor…</div>}>
+          {isPostComposerOpen ? (
+            <PostComposer
+              user={user}
+              onClose={() => setIsPostComposerOpen(false)}
+              onCreated={(post) => {
+                onPostCreated?.(post)
+                setComposerStatus('Publicación creada correctamente.')
+              }}
+            />
+          ) : null}
 
-      {isStoryStudioOpen ? (
-        <StoryStudio
-          user={user}
-          mode="story"
-          onClose={() => setIsStoryStudioOpen(false)}
-          onPublish={publishStoryFromStudio}
-        />
+          {isStoryStudioOpen ? (
+            <StoryStudio
+              user={user}
+              mode="story"
+              onClose={() => setIsStoryStudioOpen(false)}
+              onPublish={publishStoryFromStudio}
+            />
+          ) : null}
+        </Suspense>
       ) : null}
     </>
   )

@@ -15,6 +15,16 @@ const STORIES_POLL_INTERVAL_MS = 90_000
 const NEWS_REFRESH_INTERVAL_MS = 8 * 60 * 1000
 const MAX_HOME_STORIES = 16
 
+/** Ejecuta un callback cuando el navegador está ocioso (no compite con el primer render). */
+function runWhenIdle(callback, timeout = 4000) {
+  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+    const handle = window.requestIdleCallback(callback, { timeout })
+    return () => window.cancelIdleCallback(handle)
+  }
+  const handle = setTimeout(callback, Math.min(timeout, 2500))
+  return () => clearTimeout(handle)
+}
+
 function toTimestamp(value) {
   const parsed = Date.parse(typeof value === 'string' ? value : '')
   return Number.isFinite(parsed) ? parsed : 0
@@ -149,9 +159,10 @@ export default function useLayoutConfig({ enableLiveSync = true } = {}) {
 
     void refreshStories()
 
-    const rssBootstrapTimer = setTimeout(() => {
+    // La recolección RSS es pesada (8 feeds + parseo): se difiere a cuando el navegador esté ocioso.
+    const cancelIdleRss = runWhenIdle(() => {
       void refreshStories({ collectRss: true })
-    }, 800)
+    })
 
     const storiesTimer = setInterval(() => {
       void refreshStories()
@@ -163,7 +174,7 @@ export default function useLayoutConfig({ enableLiveSync = true } = {}) {
 
     return () => {
       isMounted = false
-      clearTimeout(rssBootstrapTimer)
+      cancelIdleRss()
       clearInterval(storiesTimer)
       clearInterval(rssTimer)
     }

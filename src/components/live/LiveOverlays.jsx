@@ -1,7 +1,7 @@
 import './LiveOverlays.css'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { formatElapsed, useLiveBroadcast } from '../../contexts/LiveBroadcastContext'
+import { formatElapsed, useElapsed, useLiveBroadcast } from '../../contexts/LiveBroadcastContext'
 import LiveStudio from './LiveStudio'
 
 function SelfVideo({ stream, className }) {
@@ -17,7 +17,8 @@ function SelfVideo({ stream, className }) {
 }
 
 function LiveDock() {
-  const { isLive, isMonitorOpen, stream, viewerCount, elapsedSec, openMonitor, stopBroadcast } = useLiveBroadcast()
+  const { isLive, isMonitorOpen, stream, viewerCount, startedAt, openMonitor, stopBroadcast } = useLiveBroadcast()
+  const elapsedSec = useElapsed(isLive && !isMonitorOpen ? startedAt : 0)
   if (!isLive || isMonitorOpen) return null
 
   return (
@@ -46,13 +47,14 @@ function LiveMonitor() {
     meta,
     viewerCount,
     viewers,
-    elapsedSec,
+    startedAt,
     sharePath,
     isStopping,
     error,
     closeMonitor,
     stopBroadcast,
   } = useLiveBroadcast()
+  const elapsedSec = useElapsed(isMonitorOpen && isLive ? startedAt : 0)
   const [copied, setCopied] = useState(false)
 
   if (!isMonitorOpen || !isLive) return null
