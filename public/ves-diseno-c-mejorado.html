@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Venezuela en su Realidad — Mosaico Ciudadano</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Inter:wght@400;500;600;700&family=Poppins:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --gold:#F2B705;
+    --blue:#2447B0;
+    --red:#D4213B;
+    --bg:#101012;
+    --panel:#18181B;
+    --panel2:#1F1F23;
+    --line:#2A2A2E;
+    --text:#F5F5F4;
+    --muted:#96969B;
+    --mono:'IBM Plex Mono', monospace;
+    --ring: conic-gradient(from 210deg, var(--gold), var(--blue), var(--red), var(--gold));
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{background:var(--bg); color:var(--text); font-family:'Inter',sans-serif; -webkit-font-smoothing:antialiased;}
+  a{color:inherit; text-decoration:none;}
+  button{font-family:inherit; cursor:pointer;}
+  ::selection{background:var(--gold); color:#161200;}
+  ::-webkit-scrollbar{width:8px; height:8px;}
+  ::-webkit-scrollbar-thumb{background:#2c2c30; border-radius:4px;}
+
+  .flagbar{height:3px; width:100%; background:linear-gradient(90deg,var(--gold) 0 33.3%, var(--blue) 33.3% 66.6%, var(--red) 66.6% 100%); position:sticky; top:0; z-index:50;}
+
+  /* ---------- SHELL ---------- */
+  .shell{display:grid; grid-template-columns:76px 1fr; min-height:100vh;}
+
+  /* ---------- LEFT RAIL ---------- */
+  .rail{
+    border-right:1px solid var(--line); display:flex; flex-direction:column; align-items:center;
+    padding:20px 0; gap:6px; position:sticky; top:3px; height:calc(100vh - 3px);
+  }
+  .rail .mark{width:38px; height:38px; border-radius:11px; background:var(--ring); margin-bottom:22px; flex:none;}
+  .rail a{
+    width:46px; height:46px; border-radius:13px; display:flex; align-items:center; justify-content:center;
+    font-size:19px; color:var(--muted); position:relative; transition:background .15s, color .15s;
+  }
+  .rail a:hover{background:var(--panel2); color:var(--text);}
+  .rail a.active{color:#0f0f11; background:var(--gold);}
+  .rail a .dot{position:absolute; top:6px; right:6px; width:7px; height:7px; border-radius:50%; background:var(--red); border:1.5px solid var(--bg);}
+  .rail .spacer{flex:1;}
+  .rail .me{width:38px; height:38px; border-radius:50%; padding:2.5px; background:var(--ring); margin-top:8px;}
+  .rail .me .in{width:100%; height:100%; border-radius:50%; background:#3a3a3f; border:2px solid var(--bg);}
+
+  /* ---------- TOPBAR ---------- */
+  .topbar{
+    display:flex; align-items:center; gap:18px; padding:14px 28px;
+    border-bottom:1px solid var(--line); position:sticky; top:3px; background:rgba(16,16,18,.88);
+    backdrop-filter:blur(10px); z-index:20;
+  }
+  .brandtext{font-family:'Poppins'; font-weight:700; font-size:15.5px; white-space:nowrap;}
+  .brandtext span{color:var(--muted); font-weight:500; font-size:12px; display:block; margin-top:1px;}
+  .searchwrap{flex:1; max-width:460px; display:flex; align-items:center; gap:9px; background:var(--panel2); border:1px solid var(--line); border-radius:11px; padding:9px 14px;}
+  .searchwrap span.ic{color:var(--muted); font-size:14px;}
+  .searchwrap input{flex:1; background:none; border:none; outline:none; color:var(--text); font-size:13.5px;}
+  .searchwrap input::placeholder{color:var(--muted);}
+  .topright{display:flex; align-items:center; gap:14px; margin-left:auto;}
+  .topright .quickpost{background:var(--gold); color:#1a1400; border:none; padding:9px 16px; border-radius:10px; font-weight:700; font-size:13px;}
+  .topright .ic{font-size:18px; color:var(--muted); position:relative;}
+  .topright .ic .n{position:absolute; top:-6px; right:-9px; background:var(--red); color:#fff; font-size:9px; font-weight:800; padding:1px 5px; border-radius:8px; font-family:var(--mono);}
+
+  /* ---------- MAIN GRID ---------- */
+  .main{display:grid; grid-template-columns:1fr 340px; gap:0; max-width:1180px; margin:0 auto;}
+  .feedcol{padding:24px 28px; max-width:600px; width:100%; justify-self:center;}
+  .sidecol{padding:24px 24px 24px 0; position:sticky; top:66px; height:fit-content;}
+
+  /* ---------- STORIES ---------- */
+  .stories{display:flex; gap:16px; overflow-x:auto; padding:2px 2px 18px;}
+  .story{flex:none; display:flex; flex-direction:column; align-items:center; gap:6px; width:64px;}
+  .story .ring{width:60px; height:60px; border-radius:50%; padding:2.5px; background:var(--ring); display:flex; align-items:center; justify-content:center;}
+  .story.seen .ring{background:#333338;}
+  .story .ring .in{width:100%; height:100%; border-radius:50%; background:#2c2c30; border:2.5px solid var(--bg); background-size:cover; background-position:center;}
+  .story span{font-size:10.5px; color:var(--muted); text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:64px;}
+  .story.add .ring{background:#2c2c30;}
+  .story.add .in{display:flex; align-items:center; justify-content:center; font-size:20px; color:var(--gold); font-weight:700; background:#232326;}
+  .story.live .ring{animation:pulsering 2.2s ease-in-out infinite;}
+  @keyframes pulsering{0%,100%{filter:brightness(1)} 50%{filter:brightness(1.35)}}
+
+  /* ---------- COMPOSER ---------- */
+  .composer{background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:14px 16px; margin-bottom:22px; display:flex; align-items:center; gap:12px;}
+  .composer .av{width:36px;height:36px;border-radius:50%; padding:2px; background:var(--ring); flex:none;}
+  .composer .av .in{width:100%; height:100%; border-radius:50%; background:#3a3a3f; border:2px solid var(--panel);}
+  .composer .field{flex:1; color:var(--muted); font-size:13.5px; background:var(--panel2); border-radius:10px; padding:9px 14px;}
+  .composer .icons{display:flex; gap:10px; color:var(--muted); font-size:16px;}
+
+  /* ---------- FEED POST (IG-style, single column) ---------- */
+  .post{margin-bottom:26px;}
+  .post .phead{display:flex; align-items:center; gap:10px; margin-bottom:10px;}
+  .post .phead .av{width:38px;height:38px;border-radius:50%; padding:2px; background:var(--ring); flex:none;}
+  .post .phead .av .in{width:100%; height:100%; border-radius:50%; background:#3a3a3f; border:2px solid var(--bg);}
+  .post .phead .who b{font-size:13.5px; font-weight:600;}
+  .post .phead .who div{font-size:11px; color:var(--muted); font-family:var(--mono); margin-top:1px;}
+  .post .phead .tag{margin-left:auto; font-size:9.5px; font-weight:700; font-family:var(--mono); padding:4px 9px; border-radius:7px; letter-spacing:.04em;}
+  .post .phead .tag.denuncia{background:rgba(212,33,59,.14); color:#ff6b7f; border:1px solid rgba(212,33,59,.4);}
+  .post .phead .tag.historia{background:rgba(242,183,5,.14); color:var(--gold); border:1px solid rgba(242,183,5,.4);}
+  .post .phead .tag.live{background:#fff; color:#000; display:flex; align-items:center; gap:5px;}
+  .post .phead .tag.live::before{content:''; width:6px;height:6px;border-radius:50%; background:var(--red); animation:blink 1.4s infinite;}
+  @keyframes blink{50%{opacity:.25}}
+
+  .post .media{
+    aspect-ratio:4/5; border-radius:16px; overflow:hidden; position:relative; border:1px solid var(--line);
+    background:repeating-linear-gradient(135deg, #202024 0 16px, #18181b 16px 32px);
+  }
+  .post .media .loc{position:absolute; bottom:12px; left:14px; font-size:11px; font-family:var(--mono); color:#fff; background:rgba(0,0,0,.45); padding:4px 9px; border-radius:7px; backdrop-filter:blur(4px);}
+
+  .post .pactions{display:flex; align-items:center; gap:16px; padding:12px 2px 6px; font-size:19px; color:#e8e8e6;}
+  .post .pactions .spacer{flex:1;}
+  .post .pactions .save{font-size:18px;}
+  .post .stats{padding:0 2px; font-size:13px; font-weight:700; margin-bottom:6px;}
+  .post .caption{padding:0 2px; font-size:13.5px; line-height:1.5; color:#e2e2e0;}
+  .post .caption b{margin-right:6px;}
+  .post .caption .muted{color:var(--muted);}
+  .post .viewcomments{padding:6px 2px 0; font-size:12.5px; color:var(--muted);}
+  .post .time{padding:6px 2px 0; font-size:10.5px; color:#5f5f64; font-family:var(--mono); text-transform:uppercase; letter-spacing:.05em;}
+
+  /* ---------- EXPLORE GRID ---------- */
+  .sectiontitle{display:flex; align-items:baseline; justify-content:space-between; margin:8px 0 14px;}
+  .sectiontitle h3{font-family:'Poppins'; font-weight:600; font-size:15px;}
+  .sectiontitle .sub{font-size:11.5px; color:var(--muted); font-family:var(--mono);}
+  .grid{display:grid; grid-template-columns:repeat(3, 1fr); gap:4px; margin-bottom:8px;}
+  .grid .cell{position:relative; aspect-ratio:1/1; overflow:hidden; background:repeating-linear-gradient(120deg,#202024 0 14px,#18181b 14px 28px);}
+  .grid .cell:first-child{grid-row:span 2; grid-column:span 2; aspect-ratio:auto;}
+  .grid .cell::after{content:''; position:absolute; inset:0; background:linear-gradient(0deg, rgba(0,0,0,.55), transparent 45%); opacity:0; transition:opacity .18s;}
+  .grid .cell:hover::after{opacity:1;}
+  .grid .cell .stat{position:absolute; bottom:8px; left:8px; font-size:10.5px; font-weight:700; color:#fff; opacity:0; transition:opacity .18s; font-family:var(--mono);}
+  .grid .cell:hover .stat{opacity:1;}
+  .grid .cell .badge{position:absolute; top:7px; left:7px; font-size:8.5px; font-weight:800; font-family:var(--mono); padding:3px 7px; border-radius:6px;}
+  .grid .cell .badge.denuncia{background:var(--red); color:#fff;}
+  .grid .cell .badge.historia{background:var(--gold); color:#1a1400;}
+
+  /* ---------- SIDEBAR ---------- */
+  .miniprofile{display:flex; align-items:center; gap:12px; margin-bottom:22px;}
+  .miniprofile .av{width:52px;height:52px;border-radius:50%; padding:2.5px; background:var(--ring);}
+  .miniprofile .av .in{width:100%; height:100%; border-radius:50%; background:#3a3a3f; border:2px solid var(--bg);}
+  .miniprofile b{font-size:13.5px;}
+  .miniprofile div{font-size:11.5px; color:var(--muted); font-family:var(--mono);}
+  .miniprofile .switch{margin-left:auto; font-size:11.5px; color:var(--gold); font-weight:700;}
+
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:16px; margin-bottom:18px;}
+  .panel h4{font-family:'Poppins'; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:12px; display:flex; align-items:center; gap:8px;}
+  .panel h4 .livedot{width:7px;height:7px;border-radius:50%; background:var(--red); animation:blink 1.4s infinite;}
+
+  .pulseitem{display:flex; gap:10px; padding:9px 0; border-bottom:1px solid var(--line); align-items:flex-start;}
+  .pulseitem:last-child{border:none; padding-bottom:0;}
+  .pulseitem .t{font-family:var(--mono); font-size:10px; color:var(--muted); width:38px; flex:none; padding-top:2px;}
+  .pulseitem b{font-size:12.5px; display:block; line-height:1.35; font-weight:600;}
+  .pulseitem span{font-size:11px; color:var(--muted);}
+
+  .suggest{display:flex; align-items:center; gap:10px; padding:8px 0;}
+  .suggest .av{width:34px;height:34px;border-radius:50%; padding:2px; background:var(--ring);}
+  .suggest .av .in{width:100%; height:100%; border-radius:50%; background:#3a3a3f; border:2px solid var(--panel);}
+  .suggest .who b{font-size:12.5px; display:block;}
+  .suggest .who span{font-size:10.5px; color:var(--muted); font-family:var(--mono);}
+  .suggest button{margin-left:auto; background:none; border:1px solid var(--line); color:var(--text); font-size:11px; font-weight:700; padding:6px 12px; border-radius:8px;}
+  .suggest button:hover{border-color:var(--gold); color:var(--gold);}
+
+  .footerlinks{font-size:10.5px; color:#59595e; line-height:1.9; padding:6px 4px;}
+  .footerlinks span{margin-right:8px;}
+
+  @media (max-width:1020px){
+    .main{grid-template-columns:1fr;}
+    .sidecol{display:none;}
+    .feedcol{max-width:600px; margin:0 auto;}
+  }
+  @media (max-width:640px){
+    .rail{display:none;}
+    .shell{grid-template-columns:1fr;}
+    .grid{grid-template-columns:repeat(2,1fr)}
+    .grid .cell:first-child{grid-column:span 2; grid-row:span 1; aspect-ratio:2/1.1}
+  }
+</style>
+</head>
+<body>
+
+<div class="flagbar"></div>
+<div class="shell">
+
+  <!-- LEFT ICON RAIL -->
+  <div class="rail">
+    <div class="mark"></div>
+    <a class="active" title="Inicio">⌂</a>
+    <a title="Explorar">◎</a>
+    <a title="Denuncias">⚠<span class="dot"></span></a>
+    <a title="En vivo">▶</a>
+    <a title="Mensajes">✉</a>
+    <a title="Guardado">🔖</a>
+    <div class="spacer"></div>
+    <div class="me"><div class="in"></div></div>
+  </div>
+
+  <div>
+    <!-- TOPBAR -->
+    <div class="topbar">
+      <div class="brandtext">Venezuela en su Realidad<span>Historias y publicaciones ciudadanas</span></div>
+      <div class="searchwrap"><span class="ic">⌕</span><input placeholder="Buscar en Venezuela en su realidad"></div>
+      <div class="topright">
+        <button class="quickpost">+ Publicar</button>
+        <span class="ic">♡</span>
+        <span class="ic">✉<span class="n">3</span></span>
+      </div>
+    </div>
+
+    <div class="main">
+      <!-- FEED COLUMN -->
+      <div class="feedcol">
+
+        <div class="stories">
+          <div class="story add"><div class="ring"><div class="in">+</div></div><span>Tu historia</span></div>
+          <div class="story live"><div class="ring"><div class="in"></div></div><span>Colectivos</span></div>
+          <div class="story"><div class="ring"><div class="in"></div></div><span>Análisis VE</span></div>
+          <div class="story seen"><div class="ring"><div class="in"></div></div><span>Memoria</span></div>
+          <div class="story"><div class="ring"><div class="in"></div></div><span>Edo. político</span></div>
+          <div class="story seen"><div class="ring"><div class="in"></div></div><span>Mapa social</span></div>
+          <div class="story"><div class="ring"><div class="in"></div></div><span>Foro hoy</span></div>
+        </div>
+
+        <div class="composer">
+          <div class="av"><div class="in"></div></div>
+          <div class="field">Comparte una historia o publicación...</div>
+          <div class="icons"><span>📷</span><span>🎥</span><span>⚠️</span></div>
+        </div>
+
+        <!-- POST 1 -->
+        <div class="post">
+          <div class="phead">
+            <div class="av"><div class="in"></div></div>
+            <div class="who"><b>Colectivo Vecinal Catia</b><div>hace 5 min · Caracas</div></div>
+            <span class="tag live">EN VIVO</span>
+          </div>
+          <div class="media"><div class="loc">📍 Av. principal, Catia</div></div>
+          <div class="pactions"><span>♡</span><span>💬</span><span>↗</span><span class="spacer"></span><span class="save">🔖</span></div>
+          <div class="stats">238 reacciones</div>
+          <div class="caption"><b>colectivo_vecinal_catia</b><span class="muted">Reporte en tiempo real de movimiento en la zona. Se pide precaución y evitar la avenida principal.</span></div>
+          <div class="viewcomments">Ver los 54 comentarios</div>
+          <div class="time">Hace 5 minutos</div>
+        </div>
+
+        <!-- POST 2 -->
+        <div class="post">
+          <div class="phead">
+            <div class="av"><div class="in"></div></div>
+            <div class="who"><b>Memoria Ciudadana</b><div>hace 2 h · Archivo</div></div>
+            <span class="tag historia">HISTORIA</span>
+          </div>
+          <div class="media"></div>
+          <div class="pactions"><span>♡</span><span>💬</span><span>↗</span><span class="spacer"></span><span class="save">🔖</span></div>
+          <div class="stats">612 reacciones</div>
+          <div class="caption"><b>memoria_ciudadana</b><span class="muted">"Salimos porque ya no aguantábamos más." Un archivo de testimonios desde 2017 hasta hoy, para no olvidar.</span></div>
+          <div class="viewcomments">Ver los 140 comentarios</div>
+          <div class="time">Hace 2 horas</div>
+        </div>
+
+        <!-- EXPLORE GRID -->
+        <div class="sectiontitle"><h3>Explorar más publicaciones</h3><span class="sub">1,204 hoy</span></div>
+        <div class="grid">
+          <div class="cell"><span class="badge denuncia">DENUNCIA</span><span class="stat">❤ 340 · 💬 76</span></div>
+          <div class="cell"><span class="badge historia">HISTORIA</span><span class="stat">❤ 176 · 💬 31</span></div>
+          <div class="cell"><span class="badge denuncia">DENUNCIA</span><span class="stat">❤ 92 · 💬 18</span></div>
+          <div class="cell"><span class="badge historia">HISTORIA</span><span class="stat">❤ 88 · 💬 22</span></div>
+          <div class="cell"><span class="badge historia">HISTORIA</span><span class="stat">❤ 210 · 💬 40</span></div>
+        </div>
+      </div>
+
+      <!-- SIDEBAR -->
+      <div class="sidecol">
+        <div class="miniprofile">
+          <div class="av"><div class="in"></div></div>
+          <div><b>tu_usuario</b><div>Ciudadano verificado</div></div>
+          <span class="switch">Cambiar</span>
+        </div>
+
+        <div class="panel">
+          <h4><span class="livedot"></span>Pulso ciudadano</h4>
+          <div class="pulseitem"><div class="t">5 min</div><div><b>Reporte de colectivos en tiempo real</b><span>Actualizado constantemente</span></div></div>
+          <div class="pulseitem"><div class="t">21:00</div><div><b>Foro ciudadano hoy en la noche</b><span>Caracas · acceso interno</span></div></div>
+          <div class="pulseitem"><div class="t">hoy</div><div><b>Condiciones de vida y bienestar</b><span>Tema de la semana · 1,204 publicaciones</span></div></div>
+        </div>
+
+        <div class="panel">
+          <h4>Sugerencias para ti</h4>
+          <div class="suggest"><div class="av"><div class="in"></div></div><div class="who"><b>Análisis VE</b><span>Seguido por 3 conocidos</span></div><button>Seguir</button></div>
+          <div class="suggest"><div class="av"><div class="in"></div></div><div class="who"><b>Mapa Social</b><span>Cobertura nacional</span></div><button>Seguir</button></div>
+          <div class="suggest"><div class="av"><div class="in"></div></div><div class="who"><b>Estado Político</b><span>Nuevo en la plataforma</span></div><button>Seguir</button></div>
+        </div>
+
+        <div class="footerlinks">
+          <span>Acerca de</span><span>Ayuda</span><span>Privacidad</span><span>Términos</span><br>
+          © 2026 Venezuela en su Realidad
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

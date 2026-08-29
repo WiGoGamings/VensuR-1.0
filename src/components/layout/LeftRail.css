@@ -1,0 +1,237 @@
+.sidebar .side-card {
+  margin-bottom: 17px;
+  padding: 17px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: rgba(18, 22, 29, 0.82);
+}
+
+.sidebar .side-card h2 {
+  margin: 0 0 13px;
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font: 700 11px Archivo, sans-serif;
+}
+
+.nav-list {
+  display: grid;
+  gap: 3px;
+}
+
+.nav-list a,
+.activity-card a {
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 9px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.nav-list a:hover,
+.activity-card a:hover {
+  background: var(--panel-2);
+}
+
+.nav-list a.active {
+  color: #fff;
+  border-left: 3px solid var(--gold);
+  background: linear-gradient(90deg, rgba(242, 183, 5, 0.17), transparent);
+}
+
+.nav-list small {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.nav-icon,
+.activity-card a span {
+  width: 19px;
+  color: var(--gold);
+  text-align: center;
+  font-weight: 800;
+}
+
+.activity-card {
+  padding-bottom: 10px;
+}
+
+.activity-card a {
+  margin: 1px 0;
+}
+
+.activity-card a span {
+  color: var(--muted);
+}
+
+.sidebar-note {
+  margin: 25px 12px;
+  color: #626c7c;
+  font: 500 12px/1.5 Archivo, sans-serif;
+}
+
+.sidebar-user-badge {
+  display: none;
+}
+
+.nav-tooltip {
+  display: none;
+}
+
+@media (min-width: 1051px) {
+  .sidebar {
+    margin: -24px 0 -48px;
+    padding-top: 24px;
+    border-right: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    flex-direction: column;
+  }
+
+  .sidebar-user-badge {
+    display: grid;
+    place-items: center;
+    position: relative;
+    width: 38px;
+    height: 38px;
+    margin-bottom: 22px;
+    border-radius: 11px;
+    border: 1px solid var(--line);
+    overflow: hidden;
+    color: var(--text);
+    background: linear-gradient(
+      90deg,
+      var(--gold) 0 33%,
+      var(--blue) 33% 66%,
+      var(--red) 66%
+    );
+  }
+
+  .sidebar-user-badge.active {
+    box-shadow: 0 0 0 2px rgba(242, 183, 5, 0.45);
+  }
+
+  .sidebar-user-badge .nav-tooltip,
+  .nav-list a .nav-tooltip {
+    display: block;
+    position: absolute;
+    left: calc(100% + 10px);
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(10, 14, 22, 0.96);
+    color: var(--text);
+    font: 700 11px/1 Archivo, sans-serif;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 160ms ease;
+    z-index: 4;
+  }
+
+  .sidebar-user-badge .nav-tooltip::before,
+  .nav-list a .nav-tooltip::before {
+    content: '';
+    position: absolute;
+    left: -6px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+    border-right: 6px solid rgba(10, 14, 22, 0.96);
+  }
+
+  .sidebar-user-badge:hover .nav-tooltip,
+  .sidebar-user-badge:focus-visible .nav-tooltip,
+  .nav-list a:hover .nav-tooltip,
+  .nav-list a:focus-visible .nav-tooltip {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .sidebar-user-avatar,
+  .sidebar-user-fallback {
+    width: 100%;
+    height: 100%;
+  }
+
+  .sidebar-user-avatar {
+    display: block;
+    object-fit: cover;
+  }
+
+  .sidebar-user-fallback {
+    display: grid;
+    place-items: center;
+    font: 800 11px Archivo, sans-serif;
+    color: #171300;
+  }
+
+  .sidebar .side-card {
+    width: 46px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .sidebar .side-card h2,
+  .sidebar .activity-card,
+  .sidebar-note {
+    display: none;
+  }
+
+  .nav-list a {
+    width: 46px;
+    height: 46px;
+    padding: 0;
+    position: relative;
+    justify-content: center;
+    margin-bottom: 6px;
+    border-radius: 13px;
+    color: var(--muted);
+    font-size: 0;
+  }
+
+  .nav-list a.active {
+    color: #171300;
+    border: 0;
+    background: var(--gold);
+  }
+
+  .nav-list a:nth-child(5)::after {
+    content: '';
+    top: 6px;
+    right: 6px;
+    width: 7px;
+    height: 7px;
+    position: absolute;
+    border-radius: 50%;
+    border: 1px solid var(--bg);
+    background: var(--red);
+  }
+
+  .nav-icon {
+    color: inherit;
+    font-size: 19px;
+  }
+
+  .nav-list small {
+    display: none;
+  }
+}

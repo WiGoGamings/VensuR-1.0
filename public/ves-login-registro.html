@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Venezuela en su Realidad — Acceso</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Inter:wght@400;500;600;700&family=Poppins:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --gold:#F2B705;
+    --blue:#2447B0;
+    --red:#D4213B;
+    --bg:#101012;
+    --panel:#18181B;
+    --panel2:#1F1F23;
+    --line:#2A2A2E;
+    --text:#F5F5F4;
+    --muted:#96969B;
+    --mono:'IBM Plex Mono', monospace;
+    --ring: conic-gradient(from 210deg, var(--gold), var(--blue), var(--red), var(--gold));
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{background:var(--bg); color:var(--text); font-family:'Inter',sans-serif; -webkit-font-smoothing:antialiased; min-height:100vh;}
+  a{color:inherit; text-decoration:none;}
+  button{font-family:inherit; cursor:pointer;}
+  ::selection{background:var(--gold); color:#161200;}
+
+  .flagbar{height:3px; width:100%; background:linear-gradient(90deg,var(--gold) 0 33.3%, var(--blue) 33.3% 66.6%, var(--red) 66.6% 100%);}
+
+  .shell{display:grid; grid-template-columns:1fr 1fr; min-height:calc(100vh - 3px);}
+
+  /* ---------- LEFT: BRAND PANEL ---------- */
+  .brandside{
+    position:relative; overflow:hidden; padding:56px 56px;
+    display:flex; flex-direction:column; justify-content:space-between;
+    background:
+      radial-gradient(circle at 15% 20%, rgba(242,183,5,.10), transparent 40%),
+      radial-gradient(circle at 85% 75%, rgba(212,33,59,.10), transparent 45%),
+      radial-gradient(circle at 50% 100%, rgba(36,71,176,.14), transparent 50%),
+      #0c0c0d;
+    border-right:1px solid var(--line);
+  }
+  .brandside::before{
+    content:''; position:absolute; inset:0; opacity:.5;
+    background-image: radial-gradient(circle, #232326 1px, transparent 1px);
+    background-size:26px 26px; mask-image:linear-gradient(180deg, transparent, #000 30%, #000 70%, transparent);
+  }
+  .brandside > *{position:relative; z-index:1;}
+
+  .brandmark{display:flex; align-items:center; gap:12px;}
+  .brandmark .ring{width:42px; height:42px; border-radius:12px; background:var(--ring);}
+  .brandmark b{font-family:'Poppins'; font-weight:800; font-size:17px; letter-spacing:.01em;}
+
+  .brandmain{max-width:420px;}
+  .brandmain h1{font-family:'Poppins'; font-weight:700; font-size:34px; line-height:1.22; margin-bottom:16px;}
+  .brandmain h1 span{background:linear-gradient(90deg,var(--gold),#ffd84a); -webkit-background-clip:text; background-clip:text; color:transparent;}
+  .brandmain p{font-size:14.5px; color:var(--muted); line-height:1.6;}
+
+  .stackpreview{display:flex; align-items:center; margin-top:34px;}
+  .stackpreview .av{width:38px; height:38px; border-radius:50%; padding:2px; background:var(--ring); margin-left:-10px; border:2px solid #0c0c0d;}
+  .stackpreview .av:first-child{margin-left:0;}
+  .stackpreview .av .in{width:100%; height:100%; border-radius:50%; background:#3a3a3f;}
+  .stackpreview span{margin-left:14px; font-size:12.5px; color:var(--muted); font-family:var(--mono);}
+
+  .brandfoot{display:flex; gap:28px;}
+  .brandfoot div b{font-family:'Poppins'; font-size:20px; display:block;}
+  .brandfoot div span{font-size:10.5px; color:var(--muted); font-family:var(--mono); letter-spacing:.03em;}
+
+  /* ---------- RIGHT: FORM ---------- */
+  .formside{display:flex; align-items:center; justify-content:center; padding:40px;}
+  .formwrap{width:100%; max-width:380px;}
+
+  .switchtabs{display:flex; background:var(--panel2); border:1px solid var(--line); border-radius:12px; padding:4px; margin-bottom:30px;}
+  .switchtabs button{flex:1; background:none; border:none; color:var(--muted); font-weight:700; font-size:13px; padding:10px; border-radius:9px;}
+  .switchtabs button.active{background:var(--gold); color:#161200;}
+
+  .formwrap h2{font-family:'Poppins'; font-weight:700; font-size:22px; margin-bottom:6px;}
+  .formwrap .sub{font-size:13px; color:var(--muted); margin-bottom:28px;}
+
+  .field{margin-bottom:16px;}
+  .field label{display:block; font-size:11.5px; font-weight:700; color:var(--muted); font-family:var(--mono); text-transform:uppercase; letter-spacing:.04em; margin-bottom:7px;}
+  .field .inputwrap{display:flex; align-items:center; gap:10px; background:var(--panel2); border:1px solid var(--line); border-radius:11px; padding:12px 14px; transition:border-color .15s;}
+  .field .inputwrap:focus-within{border-color:var(--gold);}
+  .field .inputwrap .ic{color:var(--muted); font-size:15px; flex:none;}
+  .field .inputwrap input{flex:1; background:none; border:none; outline:none; color:var(--text); font-size:14px;}
+  .field .inputwrap input::placeholder{color:#5f5f64;}
+  .field .inputwrap .toggle{font-size:11px; color:var(--muted); font-family:var(--mono); cursor:pointer;}
+
+  .rowbetween{display:flex; align-items:center; justify-content:space-between; margin-bottom:22px; font-size:12.5px;}
+  .checkline{display:flex; align-items:center; gap:8px; color:var(--muted);}
+  .checkline input{accent-color:var(--gold);}
+  .linklike{color:var(--gold); font-weight:600;}
+
+  .submitbtn{width:100%; background:var(--gold); color:#161200; border:none; padding:13px; border-radius:11px; font-weight:800; font-size:14px; margin-bottom:18px;}
+  .submitbtn:hover{filter:brightness(1.05);}
+
+  .divider{display:flex; align-items:center; gap:12px; margin:22px 0; color:#5f5f64; font-size:11px; font-family:var(--mono);}
+  .divider::before,.divider::after{content:''; flex:1; height:1px; background:var(--line);}
+
+  .oauth{display:flex; flex-direction:column; gap:10px; margin-bottom:26px;}
+  .oauth button{display:flex; align-items:center; justify-content:center; gap:10px; background:var(--panel2); border:1px solid var(--line); color:var(--text); padding:11px; border-radius:11px; font-weight:600; font-size:13px;}
+  .oauth button:hover{border-color:#3a3a40;}
+
+  .footswitch{text-align:center; font-size:13px; color:var(--muted);}
+  .footswitch b{color:var(--gold); font-weight:700; cursor:pointer;}
+
+  .anontip{display:flex; gap:10px; align-items:flex-start; background:rgba(242,183,5,.06); border:1px solid rgba(242,183,5,.25); border-radius:11px; padding:12px 14px; margin-bottom:22px; font-size:12px; color:#e3d9b0; line-height:1.5;}
+  .anontip .ic{font-size:15px; flex:none;}
+
+  .strengthbar{display:flex; gap:4px; margin-top:8px;}
+  .strengthbar div{height:3px; flex:1; border-radius:2px; background:var(--line);}
+  .strengthbar div.on1{background:var(--red);}
+  .strengthbar div.on2{background:var(--gold);}
+  .strengthbar div.on3{background:#3fae5c;}
+
+  .pane{display:none;}
+  .pane.active{display:block;}
+
+  @media (max-width:900px){
+    .shell{grid-template-columns:1fr;}
+    .brandside{display:none;}
+    .formside{padding:24px;}
+  }
+</style>
+</head>
+<body>
+
+<div class="flagbar"></div>
+<div class="shell">
+
+  <!-- ============ LADO IZQUIERDO: MARCA ============ -->
+  <div class="brandside">
+    <div class="brandmark">
+      <div class="ring"></div>
+      <b>VENEZUELA EN SU REALIDAD</b>
+    </div>
+
+    <div class="brandmain">
+      <h1>Historias y denuncias que no van a <span>quedarse calladas.</span></h1>
+      <p>Súmate a una comunidad que documenta, comparte y no olvida lo que pasa en Venezuela, en tiempo real y desde el territorio.</p>
+
+      <div class="stackpreview">
+        <div class="av"><div class="in"></div></div>
+        <div class="av"><div class="in"></div></div>
+        <div class="av"><div class="in"></div></div>
+        <div class="av"><div class="in"></div></div>
+        <span>+18.4K ciudadanos ya publicaron esta semana</span>
+      </div>
+    </div>
+
+    <div class="brandfoot">
+      <div><b>1,204</b><span>PUBLICACIONES HOY</span></div>
+      <div><b>312</b><span>DENUNCIAS ACTIVAS</span></div>
+      <div><b>24</b><span>TRANSMISIONES EN VIVO</span></div>
+    </div>
+  </div>
+
+  <!-- ============ LADO DERECHO: FORMULARIO ============ -->
+  <div class="formside">
+    <div class="formwrap">
+
+      <div class="switchtabs">
+        <button class="active" onclick="showPane('login', this)">Iniciar sesión</button>
+        <button onclick="showPane('registro', this)">Crear cuenta</button>
+      </div>
+
+      <!-- ---------- LOGIN ---------- -->
+      <div class="pane active" id="pane-login">
+        <h2>Bienvenido de nuevo</h2>
+        <div class="sub">Entra para ver lo que está pasando ahora mismo.</div>
+
+        <div class="field">
+          <label>Correo o usuario</label>
+          <div class="inputwrap"><span class="ic">✉</span><input placeholder="tu@correo.com"></div>
+        </div>
+        <div class="field">
+          <label>Contraseña</label>
+          <div class="inputwrap"><span class="ic">🔒</span><input type="password" placeholder="••••••••"><span class="toggle">MOSTRAR</span></div>
+        </div>
+
+        <div class="rowbetween">
+          <label class="checkline"><input type="checkbox"> Recordarme</label>
+          <span class="linklike">¿Olvidaste tu contraseña?</span>
+        </div>
+
+        <button class="submitbtn">Entrar</button>
+
+        <div class="divider">O CONTINÚA CON</div>
+        <div class="oauth">
+          <button>🔵 Continuar con Google</button>
+          <button>🍎 Continuar con Apple</button>
+        </div>
+
+        <div class="footswitch">¿No tienes cuenta? <b onclick="showPane('registro', document.querySelectorAll('.switchtabs button')[1])">Crear una</b></div>
+      </div>
+
+      <!-- ---------- REGISTRO ---------- -->
+      <div class="pane" id="pane-registro">
+        <h2>Crea tu cuenta</h2>
+        <div class="sub">Únete y empieza a compartir lo que ves en tu comunidad.</div>
+
+        <div class="anontip">
+          <span class="ic">🛡</span>
+          <div>Puedes publicar denuncias de forma <b>anónima</b> más adelante, incluso teniendo una cuenta identificada. Tu identidad nunca se muestra en una denuncia anónima.</div>
+        </div>
+
+        <div class="field">
+          <label>Nombre de usuario</label>
+          <div class="inputwrap"><span class="ic">@</span><input placeholder="tu_usuario"></div>
+        </div>
+        <div class="field">
+          <label>Correo electrónico</label>
+          <div class="inputwrap"><span class="ic">✉</span><input placeholder="tu@correo.com"></div>
+        </div>
+        <div class="field">
+          <label>Contraseña</label>
+          <div class="inputwrap"><span class="ic">🔒</span><input type="password" placeholder="Mínimo 8 caracteres"><span class="toggle">MOSTRAR</span></div>
+          <div class="strengthbar"><div class="on1"></div><div class="on2"></div><div></div></div>
+        </div>
+
+        <div class="rowbetween" style="margin-bottom:20px;">
+          <label class="checkline"><input type="checkbox"> Acepto los <span class="linklike">Términos</span> y la <span class="linklike">Privacidad</span></label>
+        </div>
+
+        <button class="submitbtn">Crear cuenta</button>
+
+        <div class="divider">O CONTINÚA CON</div>
+        <div class="oauth">
+          <button>🔵 Continuar con Google</button>
+          <button>🍎 Continuar con Apple</button>
+        </div>
+
+        <div class="footswitch">¿Ya tienes cuenta? <b onclick="showPane('login', document.querySelectorAll('.switchtabs button')[0])">Inicia sesión</b></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+function showPane(name, btn){
+  document.querySelectorAll('.pane').forEach(p=>p.classList.remove('active'));
+  document.getElementById('pane-'+name).classList.add('active');
+  document.querySelectorAll('.switchtabs button').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+}
+</script>
+
+</body>
+</html>

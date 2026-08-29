@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Venezuela en su Realidad — Páginas internas</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Inter:wght@400;500;600;700&family=Poppins:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --gold:#F2B705;
+    --blue:#2447B0;
+    --red:#D4213B;
+    --bg:#101012;
+    --panel:#18181B;
+    --panel2:#1F1F23;
+    --line:#2A2A2E;
+    --text:#F5F5F4;
+    --muted:#96969B;
+    --mono:'IBM Plex Mono', monospace;
+    --ring: conic-gradient(from 210deg, var(--gold), var(--blue), var(--red), var(--gold));
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{background:var(--bg); color:var(--text); font-family:'Inter',sans-serif; -webkit-font-smoothing:antialiased;}
+  a{color:inherit; text-decoration:none;}
+  button{font-family:inherit; cursor:pointer;}
+  ::selection{background:var(--gold); color:#161200;}
+  ::-webkit-scrollbar{width:8px; height:8px;}
+  ::-webkit-scrollbar-thumb{background:#2c2c30; border-radius:4px;}
+
+  .flagbar{height:3px; width:100%; background:linear-gradient(90deg,var(--gold) 0 33.3%, var(--blue) 33.3% 66.6%, var(--red) 66.6% 100%); position:sticky; top:0; z-index:50;}
+
+  /* switcher */
+  .switcher{display:flex; gap:8px; align-items:center; padding:12px 20px; background:#0a0a0b; border-bottom:1px solid var(--line); overflow-x:auto; position:sticky; top:3px; z-index:60;}
+  .switcher .label{font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-right:6px; white-space:nowrap; font-family:var(--mono);}
+  .switcher button{appearance:none; border:1px solid var(--line); background:var(--panel2); color:#c7cbd3; font-weight:600; font-size:13px; padding:8px 14px; border-radius:9px; white-space:nowrap;}
+  .switcher button.active{background:var(--gold); border-color:var(--gold); color:#161200;}
+
+  .page{display:none;}
+  .page.active{display:block;}
+
+  /* ---------- SHELL (compartido) ---------- */
+  .shell{display:grid; grid-template-columns:76px 1fr; min-height:100vh;}
+  .rail{border-right:1px solid var(--line); display:flex; flex-direction:column; align-items:center; padding:20px 0; gap:6px; position:sticky; top:52px; height:calc(100vh - 52px);}
+  .rail .mark{width:38px; height:38px; border-radius:11px; background:var(--ring); margin-bottom:22px; flex:none;}
+  .rail a{width:46px; height:46px; border-radius:13px; display:flex; align-items:center; justify-content:center; font-size:19px; color:var(--muted); position:relative;}
+  .rail a:hover{background:var(--panel2); color:var(--text);}
+  .rail a.active{color:#0f0f11; background:var(--gold);}
+  .rail a .dot{position:absolute; top:6px; right:6px; width:7px; height:7px; border-radius:50%; background:var(--red); border:1.5px solid var(--bg);}
+  .rail .spacer{flex:1;}
+  .rail .me{width:38px; height:38px; border-radius:50%; padding:2.5px; background:var(--ring); margin-top:8px;}
+  .rail .me .in{width:100%; height:100%; border-radius:50%; background:#3a3a3f; border:2px solid var(--bg);}
+
+  .topbar{display:flex; align-items:center; gap:18px; padding:14px 28px; border-bottom:1px solid var(--line); position:sticky; top:52px; background:rgba(16,16,18,.9); backdrop-filter:blur(10px); z-index:20;}
+  .brandtext{font-family:'Poppins'; font-weight:700; font-size:15px;}
+  .brandtext span{color:var(--muted); font-weight:500; font-size:11.5px; display:block; margin-top:1px;}
+  .searchwrap{flex:1; max-width:420px; display:flex; align-items:center; gap:9px; background:var(--panel2); border:1px solid var(--line); border-radius:11px; padding:9px 14px;}
+  .searchwrap span.ic{color:var(--muted); font-size:14px;}
+  .searchwrap input{flex:1; background:none; border:none; outline:none; color:var(--text); font-size:13px;}
+  .searchwrap input::placeholder{color:var(--muted);}
+  .topright{display:flex; align-items:center; gap:14px; margin-left:auto;}
+  .topright .quickpost{background:var(--gold); color:#1a1400; border:none; padding:9px 16px; border-radius:10px; font-weight:700; font-size:13px;}
+  .topright .ic{font-size:18px; color:var(--muted); position:relative;}
+
+  .content{max-width:1080px; margin:0 auto; padding:28px;}
+
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:18px;}
+  .avring{border-radius:50%; padding:2.5px; background:var(--ring); flex:none;}
+  .avring .in{width:100%; height:100%; border-radius:50%; background:#3a3a3f; border:2.5px solid var(--bg);}
+
+  .tag{font-size:9.5px; font-weight:700; font-family:var(--mono); padding:4px 9px; border-radius:7px; letter-spacing:.04em;}
+  .tag.denuncia{background:rgba(212,33,59,.14); color:#ff6b7f; border:1px solid rgba(212,33,59,.4);}
+  .tag.historia{background:rgba(242,183,5,.14); color:var(--gold); border:1px solid rgba(242,183,5,.4);}
+  .tag.live{background:#fff; color:#000; display:flex; align-items:center; gap:5px; width:fit-content;}
+  .tag.live::before{content:''; width:6px;height:6px;border-radius:50%; background:var(--red); animation:blink 1.4s infinite;}
+  @keyframes blink{50%{opacity:.25}}
+
+  /*=========== PERFIL ===========*/
+  #pagePerfil .cover{height:180px; border-radius:18px; background:repeating-linear-gradient(135deg,#202024 0 16px,#18181b 16px 32px); position:relative; margin-bottom:0; border:1px solid var(--line); border-bottom:none; border-bottom-left-radius:0; border-bottom-right-radius:0;}
+  #pagePerfil .profilehead{background:var(--panel); border:1px solid var(--line); border-top:none; border-radius:0 0 18px 18px; padding:0 24px 20px; margin-bottom:22px;}
+  #pagePerfil .avbig{width:104px; height:104px; margin-top:-52px; border:4px solid var(--bg);}
+  #pagePerfil .row1{display:flex; align-items:flex-end; gap:16px; justify-content:space-between; flex-wrap:wrap;}
+  #pagePerfil h1{font-family:'Poppins'; font-size:20px; font-weight:700; margin-top:12px;}
+  #pagePerfil .handle{font-family:var(--mono); color:var(--muted); font-size:12.5px; margin-top:2px;}
+  #pagePerfil .bio{font-size:13.5px; color:#d7d7d5; margin-top:12px; line-height:1.55; max-width:520px;}
+  #pagePerfil .stats{display:flex; gap:24px; margin-top:16px;}
+  #pagePerfil .stats div b{font-size:15px; display:block;}
+  #pagePerfil .stats div span{font-size:11px; color:var(--muted); font-family:var(--mono);}
+  #pagePerfil .followbtn{background:var(--gold); color:#1a1400; border:none; padding:10px 20px; border-radius:10px; font-weight:700; font-size:13px; margin-bottom:8px;}
+  #pagePerfil .tabs{display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:18px;}
+  #pagePerfil .tabs div{padding:12px 18px; font-size:13px; font-weight:700; color:var(--muted); border-bottom:2px solid transparent; cursor:pointer;}
+  #pagePerfil .tabs div.active{color:var(--gold); border-color:var(--gold);}
+  #pagePerfil .grid{display:grid; grid-template-columns:repeat(4,1fr); gap:4px;}
+  #pagePerfil .grid .cell{aspect-ratio:1/1; background:repeating-linear-gradient(120deg,#202024 0 14px,#18181b 14px 28px); position:relative;}
+  #pagePerfil .grid .cell .badge{position:absolute; top:7px; left:7px;}
+
+  /*=========== PUBLICACIÓN DETALLE ===========*/
+  #pagePost .wrap{display:grid; grid-template-columns:1fr 380px; gap:0; background:var(--panel); border:1px solid var(--line); border-radius:18px; overflow:hidden; max-width:980px; margin:0 auto;}
+  #pagePost .media{background:repeating-linear-gradient(135deg,#202024 0 16px,#18181b 16px 32px); min-height:520px; position:relative;}
+  #pagePost .media .loc{position:absolute; bottom:14px; left:16px; font-size:11px; font-family:var(--mono); color:#fff; background:rgba(0,0,0,.5); padding:4px 10px; border-radius:7px;}
+  #pagePost .side{display:flex; flex-direction:column; border-left:1px solid var(--line);}
+  #pagePost .phead{display:flex; align-items:center; gap:10px; padding:16px; border-bottom:1px solid var(--line);}
+  #pagePost .phead .avring{width:36px;height:36px;}
+  #pagePost .phead b{font-size:13.5px;}
+  #pagePost .phead div.sub{font-size:11px; color:var(--muted); font-family:var(--mono);}
+  #pagePost .comments{flex:1; overflow-y:auto; padding:14px 16px; max-height:340px;}
+  #pagePost .comment{display:flex; gap:10px; margin-bottom:14px;}
+  #pagePost .comment .avring{width:30px;height:30px;}
+  #pagePost .comment p{font-size:13px; line-height:1.5;}
+  #pagePost .comment b{font-weight:700; margin-right:6px;}
+  #pagePost .comment .muted{color:var(--muted); font-size:10.5px; font-family:var(--mono); margin-top:3px;}
+  #pagePost .caption{padding:14px 16px; border-bottom:1px solid var(--line); font-size:13px; line-height:1.5;}
+  #pagePost .caption b{margin-right:6px;}
+  #pagePost .actions{display:flex; gap:16px; padding:14px 16px; font-size:20px; border-top:1px solid var(--line);}
+  #pagePost .stats2{padding:0 16px 10px; font-size:12.5px; font-weight:700;}
+  #pagePost .addcomment{display:flex; gap:10px; align-items:center; padding:14px 16px; border-top:1px solid var(--line);}
+  #pagePost .addcomment input{flex:1; background:none; border:none; outline:none; color:var(--text); font-size:13px;}
+  #pagePost .addcomment button{color:var(--gold); font-weight:700; font-size:12.5px; background:none; border:none;}
+
+  /*=========== DENUNCIAS ===========*/
+  #pageDenuncias .headrow{display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;}
+  #pageDenuncias h1{font-family:'Poppins'; font-size:19px; font-weight:700;}
+  #pageDenuncias .filters{display:flex; gap:8px;}
+  #pageDenuncias .filters button{background:var(--panel2); border:1px solid var(--line); color:var(--muted); padding:8px 14px; border-radius:9px; font-size:12.5px; font-weight:600;}
+  #pageDenuncias .filters button.active{background:var(--red); border-color:var(--red); color:#fff;}
+  #pageDenuncias .list{display:flex; flex-direction:column; gap:12px;}
+  #pageDenuncias .item{display:flex; gap:14px; padding:14px; align-items:flex-start;}
+  #pageDenuncias .item .thumb{width:88px; height:88px; border-radius:12px; background:repeating-linear-gradient(120deg,#202024 0 12px,#18181b 12px 24px); flex:none;}
+  #pageDenuncias .item .body{flex:1;}
+  #pageDenuncias .item .toprow{display:flex; align-items:center; gap:10px; margin-bottom:6px;}
+  #pageDenuncias .item b.title{font-size:13.5px;}
+  #pageDenuncias .item .meta{font-size:11px; color:var(--muted); font-family:var(--mono); margin-left:auto;}
+  #pageDenuncias .item p{font-size:12.5px; color:#d7d7d5; line-height:1.5;}
+  #pageDenuncias .item .footrow{display:flex; gap:16px; margin-top:8px; font-size:11.5px; color:var(--muted);}
+
+  /*=========== EN VIVO ===========*/
+  #pageVivo .herolive{position:relative; border-radius:18px; overflow:hidden; background:repeating-linear-gradient(135deg,#202024 0 16px,#18181b 16px 32px); aspect-ratio:16/8; margin-bottom:24px; border:1px solid var(--line);}
+  #pageVivo .herolive .badgewrap{position:absolute; top:16px; left:16px; display:flex; gap:8px; align-items:center;}
+  #pageVivo .herolive .viewers{position:absolute; top:16px; right:16px; background:rgba(0,0,0,.5); backdrop-filter:blur(4px); padding:6px 12px; border-radius:8px; font-size:12px; font-family:var(--mono);}
+  #pageVivo .herolive .info{position:absolute; bottom:0; left:0; right:0; padding:20px; background:linear-gradient(0deg, rgba(0,0,0,.8), transparent 70%);}
+  #pageVivo .herolive .info h2{font-family:'Poppins'; font-size:18px; font-weight:700; margin-bottom:4px;}
+  #pageVivo .herolive .info .who{display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--muted);}
+  #pageVivo .row{display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;}
+  #pageVivo h3{font-family:'Poppins'; font-size:15px; font-weight:600;}
+  #pageVivo .liveGrid{display:grid; grid-template-columns:repeat(3,1fr); gap:14px;}
+  #pageVivo .card{border-radius:14px; overflow:hidden; border:1px solid var(--line);}
+  #pageVivo .card .thumb{aspect-ratio:16/9; background:repeating-linear-gradient(120deg,#202024 0 12px,#18181b 12px 24px); position:relative;}
+  #pageVivo .card .thumb .live{position:absolute; top:8px; left:8px;}
+  #pageVivo .card .thumb .viewers{position:absolute; bottom:8px; right:8px; background:rgba(0,0,0,.55); font-size:10.5px; padding:3px 8px; border-radius:6px; font-family:var(--mono);}
+  #pageVivo .card .meta{padding:10px 12px; background:var(--panel);}
+  #pageVivo .card .meta b{font-size:12.5px; display:block; margin-bottom:2px;}
+  #pageVivo .card .meta span{font-size:10.5px; color:var(--muted); font-family:var(--mono);}
+
+  @media (max-width:900px){
+    #pagePost .wrap{grid-template-columns:1fr;}
+    #pagePerfil .grid{grid-template-columns:repeat(3,1fr);}
+    #pageVivo .liveGrid{grid-template-columns:repeat(2,1fr);}
+  }
+  @media (max-width:640px){
+    .rail{display:none;}
+    .shell{grid-template-columns:1fr;}
+    #pageDenuncias .filters{overflow-x:auto;}
+    #pageVivo .liveGrid{grid-template-columns:1fr;}
+  }
+</style>
+</head>
+<body>
+
+<div class="flagbar"></div>
+<div class="switcher">
+  <span class="label">Páginas internas</span>
+  <button class="active" onclick="showPage('Perfil', this)">Perfil</button>
+  <button onclick="showPage('Post', this)">Publicación</button>
+  <button onclick="showPage('Denuncias', this)">Denuncias</button>
+  <button onclick="showPage('Vivo', this)">En vivo</button>
+</div>
+
+<div class="shell">
+  <div class="rail">
+    <div class="mark"></div>
+    <a title="Inicio">⌂</a>
+    <a title="Explorar">◎</a>
+    <a title="Denuncias" onclick="showPage('Denuncias', document.querySelectorAll('.switcher button')[2])">⚠<span class="dot"></span></a>
+    <a title="En vivo" onclick="showPage('Vivo', document.querySelectorAll('.switcher button')[3])">▶</a>
+    <a title="Mensajes">✉</a>
+    <a title="Guardado">🔖</a>
+    <div class="spacer"></div>
+    <div class="me" onclick="showPage('Perfil', document.querySelectorAll('.switcher button')[0])"><div class="in"></div></div>
+  </div>
+
+  <div>
+    <div class="topbar">
+      <div class="brandtext">Venezuela en su Realidad<span>Historias y publicaciones ciudadanas</span></div>
+      <div class="searchwrap"><span class="ic">⌕</span><input placeholder="Buscar en Venezuela en su realidad"></div>
+      <div class="topright">
+        <button class="quickpost">+ Publicar</button>
+        <span class="ic">♡</span>
+        <span class="ic">✉</span>
+      </div>
+    </div>
+
+    <!-- ======================= PERFIL ======================= -->
+    <div class="page active" id="pagePerfil">
+      <div class="content">
+        <div class="cover"></div>
+        <div class="profilehead">
+          <div class="row1">
+            <div class="avring avbig"><div class="in"></div></div>
+            <button class="followbtn">Seguir</button>
+          </div>
+          <h1>Memoria Ciudadana</h1>
+          <div class="handle">@memoria_ciudadana · Cuenta verificada</div>
+          <p class="bio">Archivo colectivo de testimonios desde 2017. Cada historia queda guardada para que no se olvide. Enviamos historias de la comunidad, verificadas antes de publicar.</p>
+          <div class="stats">
+            <div><b>312</b><span>PUBLICACIONES</span></div>
+            <div><b>18.4K</b><span>SEGUIDORES</span></div>
+            <div><b>96</b><span>SIGUIENDO</span></div>
+          </div>
+        </div>
+
+        <div class="tabs">
+          <div class="active">Publicaciones</div>
+          <div>Historias</div>
+          <div>Denuncias</div>
+          <div>Guardado</div>
+        </div>
+
+        <div class="grid">
+          <div class="cell"><span class="badge tag historia">HISTORIA</span></div>
+          <div class="cell"><span class="badge tag denuncia">DENUNCIA</span></div>
+          <div class="cell"><span class="badge tag historia">HISTORIA</span></div>
+          <div class="cell"><span class="badge tag live">EN VIVO</span></div>
+          <div class="cell"></div>
+          <div class="cell"><span class="badge tag denuncia">DENUNCIA</span></div>
+          <div class="cell"><span class="badge tag historia">HISTORIA</span></div>
+          <div class="cell"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======================= PUBLICACIÓN DETALLE ======================= -->
+    <div class="page" id="pagePost">
+      <div class="content">
+        <div class="wrap">
+          <div class="media"><div class="loc">📍 Av. principal, Catia</div></div>
+          <div class="side">
+            <div class="phead">
+              <div class="avring"><div class="in"></div></div>
+              <div><b>Colectivo Vecinal Catia</b><div class="sub">hace 5 min · Caracas</div></div>
+              <span class="tag live" style="margin-left:auto">EN VIVO</span>
+            </div>
+            <div class="caption"><b>colectivo_vecinal_catia</b>Reporte en tiempo real de movimiento en la zona. Se pide precaución a los vecinos y evitar la avenida principal hasta nuevo aviso.</div>
+            <div class="comments">
+              <div class="comment"><div class="avring"><div class="in"></div></div><div><p><b>ana_ve</b>Gracias por la información, justo iba a salir por ahí.</p><div class="muted">Hace 4 min</div></div></div>
+              <div class="comment"><div class="avring"><div class="in"></div></div><div><p><b>jose_caracas</b>Confirmo, también se ve movimiento cerca de la plaza.</p><div class="muted">Hace 3 min</div></div></div>
+              <div class="comment"><div class="avring"><div class="in"></div></div><div><p><b>mapa_social</b>Actualizando el mapa con este reporte.</p><div class="muted">Hace 1 min</div></div></div>
+            </div>
+            <div class="stats2">238 reacciones · 54 comentarios</div>
+            <div class="actions"><span>♡</span><span>💬</span><span>↗</span><span style="margin-left:auto">🔖</span></div>
+            <div class="addcomment"><div class="avring" style="width:28px;height:28px"><div class="in"></div></div><input placeholder="Añade un comentario..."><button>Publicar</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======================= DENUNCIAS ======================= -->
+    <div class="page" id="pageDenuncias">
+      <div class="content">
+        <div class="headrow">
+          <h1>Denuncias ciudadanas</h1>
+          <div class="filters">
+            <button class="active">Todas</button>
+            <button>Cercanas</button>
+            <button>Verificadas</button>
+            <button>Esta semana</button>
+          </div>
+        </div>
+        <div class="list">
+          <div class="panel item">
+            <div class="thumb"></div>
+            <div class="body">
+              <div class="toprow"><span class="tag denuncia">DENUNCIA</span><b class="title">Escasez de agua en tres municipios</b><span class="meta">Hace 40 min</span></div>
+              <p>Reportes acumulados de cortes de agua sin aviso previo en Baruta, Chacao y El Hatillo.</p>
+              <div class="footrow"><span>❤ 340</span><span>💬 76</span><span>📍 Miranda</span></div>
+            </div>
+          </div>
+          <div class="panel item">
+            <div class="thumb"></div>
+            <div class="body">
+              <div class="toprow"><span class="tag denuncia">DENUNCIA</span><b class="title">Movimiento de colectivos reportado</b><span class="meta">Hace 5 min</span></div>
+              <p>Vecinos reportan movimiento inusual cerca de la avenida principal. Se recomienda precaución.</p>
+              <div class="footrow"><span>❤ 238</span><span>💬 54</span><span>📍 Caracas</span></div>
+            </div>
+          </div>
+          <div class="panel item">
+            <div class="thumb"></div>
+            <div class="body">
+              <div class="toprow"><span class="tag denuncia">DENUNCIA</span><b class="title">Fallas eléctricas prolongadas</b><span class="meta">Hace 2 h</span></div>
+              <p>Cortes de luz de más de 6 horas reportados en zonas residenciales sin comunicación oficial.</p>
+              <div class="footrow"><span>❤ 156</span><span>💬 29</span><span>📍 Zulia</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======================= EN VIVO ======================= -->
+    <div class="page" id="pageVivo">
+      <div class="content">
+        <div class="herolive">
+          <div class="badgewrap"><span class="tag live">EN VIVO</span></div>
+          <div class="viewers">👁 1.2K viendo</div>
+          <div class="info">
+            <h2>Foro ciudadano — condiciones de vida y bienestar</h2>
+            <div class="who"><div class="avring" style="width:22px;height:22px"><div class="in"></div></div> Transmitido por Foro Ciudadano · 21:00 Caracas</div>
+          </div>
+        </div>
+
+        <div class="row"><h3>Otras transmisiones activas</h3></div>
+        <div class="liveGrid">
+          <div class="card">
+            <div class="thumb"><span class="tag live thumb-live" style="position:absolute;top:8px;left:8px">EN VIVO</span><span class="viewers">👁 340</span></div>
+            <div class="meta"><b>Reporte desde Catia</b><span>Colectivo Vecinal Catia</span></div>
+          </div>
+          <div class="card">
+            <div class="thumb"><span class="tag live thumb-live" style="position:absolute;top:8px;left:8px">EN VIVO</span><span class="viewers">👁 128</span></div>
+            <div class="meta"><b>Análisis del día</b><span>Análisis VE</span></div>
+          </div>
+          <div class="card">
+            <div class="thumb"><span class="tag live thumb-live" style="position:absolute;top:8px;left:8px">EN VIVO</span><span class="viewers">👁 812</span></div>
+            <div class="meta"><b>Cobertura Mapa Social</b><span>Mapa Social</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+function showPage(name, btn){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.getElementById('page'+name).classList.add('active');
+  document.querySelectorAll('.switcher button').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+}
+</script>
+
+</body>
+</html>

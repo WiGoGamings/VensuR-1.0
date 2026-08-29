@@ -1,0 +1,32 @@
+footer {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  color: #657080;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+}
+
+footer span {
+  color: var(--gold);
+  font: 800 11px Archivo;
+}
+
+footer small {
+  margin-left: auto;
+}
+
+@media (max-width: 560px) {
+  footer {
+    gap: 12px;
+    padding: 16px 12px;
+    flex-wrap: wrap;
+  }
+
+  footer small {
+    margin-left: 0;
+  }
+}

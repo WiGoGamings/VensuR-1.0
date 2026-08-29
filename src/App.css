@@ -1,0 +1,73 @@
+#root {
+  min-height: 100vh;
+}
+
+.app-shell {
+  min-height: 100vh;
+  color: var(--text);
+  background: radial-gradient(circle at 50% -15%, var(--shell-glow), var(--bg) 45%);
+  overflow-x: clip;
+}
+
+.flagbar {
+  height: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--gold) 0 33.3%,
+    var(--blue) 33.3% 66.6%,
+    var(--red) 66.6%
+  );
+}
+
+.layout {
+  width: 100%;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 26px 20px 48px;
+  display: grid;
+  grid-template-columns: 238px minmax(0, 650px) 290px;
+  gap: 24px;
+}
+
+.sidebar,
+.feed,
+.right-rail {
+  min-width: 0;
+}
+
+@media (max-width: 1050px) {
+  .layout {
+    max-width: 100%;
+    grid-template-columns: 1fr;
+    gap: 16px;
+    padding: 20px 16px 36px;
+  }
+
+  .sidebar,
+  .right-rail {
+    display: none;
+  }
+}
+
+.layout-expanded {
+  grid-template-columns: 238px minmax(0, 1fr);
+}
+
+@media (max-width: 560px) {
+  .layout {
+    padding: 16px 12px 28px;
+  }
+}
+
+@media (min-width: 1051px) {
+  .layout {
+    max-width: 1180px;
+    gap: 0;
+    padding-top: 24px;
+    grid-template-columns: 76px minmax(0, 600px) 340px;
+  }
+
+  .layout-expanded {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+}

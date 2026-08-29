@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Venezuela en su realidad</title>
+    <style>
+      :root {
+        --white: #ffffff;
+        --paper: #fafafa;
+        --text: #151515;
+        --muted: #6b6b6b;
+        --line: #e9e9e9;
+        --line-soft: #f1f1f1;
+        --chip: #f2f2f2;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        background: var(--white);
+        color: var(--text);
+        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background: var(--white);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .topbar-inner {
+        max-width: 1260px;
+        margin: 0 auto;
+        height: 72px;
+        padding: 0 1.3rem;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        align-items: center;
+        gap: 1.2rem;
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.55rem;
+        font-weight: 800;
+        font-size: 2rem;
+        color: var(--text);
+        text-decoration: none;
+      }
+
+      .brand-mark {
+        width: 19px;
+        height: 34px;
+        border-radius: 10px;
+        background: linear-gradient(160deg, #f759ab 0%, #2979ff 100%);
+        position: relative;
+      }
+
+      .brand-mark::after {
+        content: "";
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #37b5f6;
+        position: absolute;
+        left: -8px;
+        bottom: 0;
+      }
+
+      .topnav {
+        display: flex;
+        justify-content: center;
+        gap: 2rem;
+        flex-wrap: wrap;
+      }
+
+      .nav-item {
+        position: relative;
+      }
+
+      .nav-item > a {
+        color: #202020;
+        text-decoration: none;
+        font-size: 1.05rem;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.35rem 0;
+      }
+
+      .nav-item > a::after {
+        content: "▾";
+        font-size: 0.72rem;
+        color: #666;
+      }
+
+      .submenu {
+        position: absolute;
+        top: calc(100% + 0.5rem);
+        left: 0;
+        min-width: 220px;
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 0.55rem;
+        padding: 0.45rem;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+        display: none;
+        z-index: 20;
+      }
+
+      .submenu a {
+        display: block;
+        text-decoration: none;
+        color: #2c2c2c;
+        font-size: 0.92rem;
+        padding: 0.5rem 0.55rem;
+        border-radius: 0.4rem;
+      }
+
+      .submenu a:hover,
+      .submenu a:focus-visible {
+        background: #f5f5f5;
+        outline: none;
+      }
+
+      .nav-item:hover .submenu,
+      .nav-item:focus-within .submenu {
+        display: block;
+      }
+
+      .cta {
+        border: 0;
+        background: #121212;
+        color: #fff;
+        text-decoration: none;
+        font-weight: 700;
+        padding: 0.9rem 1.7rem;
+        border-radius: 4px;
+      }
+
+      .page {
+        max-width: 1260px;
+        margin: 0 auto;
+        padding: 0 1.3rem 2rem;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 270px minmax(0, 1fr) 52px;
+        gap: 2rem;
+        align-items: start;
+      }
+
+      .side {
+        border-right: 1px solid var(--line);
+        padding-right: 1rem;
+        min-height: calc(100vh - 90px);
+        position: sticky;
+        top: 84px;
+      }
+
+      .side .group {
+        margin-top: 1rem;
+      }
+
+      .side a {
+        display: block;
+        padding: 0.95rem 0.9rem;
+        text-decoration: none;
+        color: #8a8a8a;
+        border-bottom: 1px solid var(--line);
+        font-size: 1.92rem;
+      }
+
+      .side a.active {
+        color: #1b1b1b;
+        font-weight: 700;
+        background: var(--chip);
+      }
+
+      .article {
+        padding-top: 1rem;
+      }
+
+      h1 {
+        margin: 0.25rem 0 0.9rem;
+        font-size: 4.2rem;
+        line-height: 1.14;
+        font-weight: 800;
+      }
+
+      h2 {
+        margin: 2.4rem 0 1rem;
+        font-size: 3.2rem;
+        line-height: 1.15;
+      }
+
+      p {
+        margin: 0 0 0.55rem;
+        font-size: 2.2rem;
+        line-height: 1.64;
+        color: #2f2f2f;
+        max-width: 66ch;
+      }
+
+      .social {
+        position: sticky;
+        top: 188px;
+        display: flex;
+        flex-direction: column;
+        gap: 1.05rem;
+        align-items: center;
+      }
+
+      .social a {
+        text-decoration: none;
+        color: #111;
+        font-weight: 700;
+        font-size: 2.25rem;
+      }
+
+      @media (max-width: 1100px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .side {
+          position: static;
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+          min-height: 0;
+          padding-right: 0;
+        }
+
+        .side .group {
+          margin-top: 0;
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .social {
+          position: static;
+          flex-direction: row;
+          justify-content: flex-start;
+          margin-top: 0.8rem;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .topbar-inner {
+          grid-template-columns: 1fr;
+          height: auto;
+          padding: 1rem;
+        }
+
+        .topnav {
+          justify-content: flex-start;
+          gap: 1rem;
+        }
+
+        .submenu {
+          position: static;
+          min-width: 0;
+          margin-top: 0.3rem;
+          box-shadow: none;
+          border-radius: 0.45rem;
+        }
+
+        .cta {
+          width: fit-content;
+        }
+
+        .side .group {
+          grid-template-columns: 1fr;
+        }
+
+        h1 {
+          font-size: clamp(2rem, 7vw, 2.6rem);
+        }
+
+        h2 {
+          font-size: clamp(1.5rem, 5vw, 2rem);
+        }
+
+        p {
+          font-size: 1.1rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="/">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span>Venezuela en su realidad</span>
+        </a>
+        <nav class="topnav" aria-label="Top navigation">
+          <div class="nav-item">
+            <a href="#que-es">Panorama</a>
+            <div class="submenu">
+              <a href="#que-es">Contexto general</a>
+              <a href="#principios">Marco politico</a>
+              <a href="#disenos">Resumen ejecutivo</a>
+            </div>
+          </div>
+          <div class="nav-item">
+            <a href="#disenos">Casos practicos</a>
+            <div class="submenu">
+              <a href="#disenos">Servicios basicos</a>
+              <a href="#disenos">Sistema de salud</a>
+              <a href="#disenos">Economia familiar</a>
+            </div>
+          </div>
+          <div class="nav-item">
+            <a href="#carteras">Fuentes</a>
+            <div class="submenu">
+              <a href="#carteras">Informes internacionales</a>
+              <a href="#carteras">Datos oficiales</a>
+              <a href="#carteras">Prensa y archivo</a>
+            </div>
+          </div>
+          <div class="nav-item">
+            <a href="#software">Recursos</a>
+            <div class="submenu">
+              <a href="#software">Repositorio documental</a>
+              <a href="#software">Linea temporal</a>
+              <a href="#software">Bibliografia clave</a>
+            </div>
+          </div>
+          <div class="nav-item">
+            <a href="#accesibilidad">Analisis</a>
+            <div class="submenu">
+              <a href="#accesibilidad">Institucional</a>
+              <a href="#accesibilidad">Social</a>
+              <a href="#accesibilidad">Prospectivo</a>
+            </div>
+          </div>
+        </nav>
+        <a class="cta" href="/">Volver al inicio</a>
+      </div>
+    </header>
+
+    <main class="page">
+      <div class="layout">
+        <aside class="side" aria-label="Indice de secciones">
+          <div class="group">
+            <a class="active" href="#que-es">Que es la crisis venezolana</a>
+            <a href="#principios">Principios</a>
+            <a href="#disenos">Hechos clave</a>
+            <a href="#ux">Dimension institucional</a>
+            <a href="#estrategia">Impacto social</a>
+            <a href="#micro">Migracion y region</a>
+            <a href="#inspiracion">Memoria ciudadana</a>
+            <a href="#carteras">Fuentes y reportes</a>
+            <a href="#software">Organismos</a>
+            <a href="#accesibilidad">Derechos humanos</a>
+          </div>
+        </aside>
+
+        <article class="article">
+          <section id="que-es">
+            <h1>Venezuela en su realidad</h1>
+            <p>Este espacio documenta, de forma clara y estructurada, la evolucion de la crisis venezolana durante 27 anos, con foco en el deterioro institucional, la corrupcion de Estado y su impacto humano.</p>
+            <p>El objetivo es ofrecer una lectura ordenada para comprender causas, etapas y consecuencias, utilizando datos verificables, contexto historico y evidencia publica.</p>
+          </section>
+
+          <section id="principios">
+            <h2>Instituciones y poder</h2>
+            <p>La concentracion de poder debilito contrapesos democraticos y redujo la autonomia de instituciones claves. El resultado ha sido una menor capacidad de control, transparencia y rendicion de cuentas.</p>
+            <p>En paralelo, la justicia, la administracion publica y los mecanismos electorales enfrentaron cuestionamientos recurrentes sobre independencia y legitimidad.</p>
+          </section>
+
+          <section id="disenos">
+            <h2>Impacto social y economico</h2>
+            <p>La combinacion de politicas fallidas, corrupcion sistemica y conflictividad politica produjo pobreza extendida, migracion forzada y deterioro de servicios basicos como salud, educacion y energia.</p>
+            <p>Esta realidad afecto de manera directa la calidad de vida de millones de familias dentro y fuera del pais.</p>
+          </section>
+        </article>
+
+        <aside class="social" aria-label="Compartir">
+          <a href="#" title="Reddit">R</a>
+          <a href="#" title="Facebook">f</a>
+          <a href="#" title="X">x</a>
+          <a href="#" title="Pinterest">p</a>
+          <a href="#" title="LinkedIn">in</a>
+        </aside>
+      </div>
+    </main>
+  </body>
+</html>
