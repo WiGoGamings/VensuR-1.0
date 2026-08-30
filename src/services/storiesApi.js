@@ -8,6 +8,23 @@ export function getMyStories() {
   return httpRequest('/api/content/me/stories')
 }
 
+const viewedStoryIds = new Set()
+
+/**
+ * Suma una vista a la historia (una sola vez por sesión de navegador).
+ * @param {string | number} storyId
+ */
+export async function markStoryViewed(storyId) {
+  const key = String(storyId ?? '')
+  if (!key || viewedStoryIds.has(key)) return
+  viewedStoryIds.add(key)
+  try {
+    await httpRequest(`/api/content/stories/${encodeURIComponent(key)}/view`, { method: 'POST' })
+  } catch {
+    viewedStoryIds.delete(key)
+  }
+}
+
 /**
  * @param {{
  * title: string,

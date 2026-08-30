@@ -13,6 +13,23 @@ export function getUserRecordings(username) {
   return httpRequest(`/api/content/users/${encodeURIComponent(String(username || '').trim())}/recordings`)
 }
 
+const viewedRecordingIds = new Set()
+
+/**
+ * Suma una vista a la grabación de en vivo (una sola vez por sesión de navegador).
+ * @param {string} recordingId
+ */
+export async function markRecordingViewed(recordingId) {
+  const key = String(recordingId ?? '')
+  if (!key || viewedRecordingIds.has(key)) return
+  viewedRecordingIds.add(key)
+  try {
+    await httpRequest(`/api/content/live/recordings/${encodeURIComponent(key)}/view`, { method: 'POST' })
+  } catch {
+    viewedRecordingIds.delete(key)
+  }
+}
+
 /**
  * @param {string} recordingId
  */

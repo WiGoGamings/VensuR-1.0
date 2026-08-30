@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { markStoryViewed } from '../services/storiesApi'
 import './Pages.css'
 
 const DEFAULT_STORY_DURATION_MS = 5_000
@@ -152,6 +153,14 @@ export default function HistoriasPage({ stories }) {
   }, [items, storyId])
 
   const currentStory = currentIndex >= 0 ? items[currentIndex] : null
+
+  useEffect(() => {
+    const id = currentStory?.id
+    if (id && !String(id).startsWith('story-')) {
+      void markStoryViewed(id)
+    }
+  }, [currentStory?.id])
+
   const storyEditor = useMemo(() => normalizeStoryEditor(currentStory?.editor), [currentStory?.editor])
   const storyMusic = useMemo(() => readStoryMusic(currentStory), [currentStory])
 

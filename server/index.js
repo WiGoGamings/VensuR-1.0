@@ -730,6 +730,7 @@ function runMigrations() {
   ensureColumn('posts', 'media_type', "TEXT NOT NULL DEFAULT ''")
   ensureColumn('posts', 'location', "TEXT NOT NULL DEFAULT 'Venezuela'")
   ensureColumn('posts', 'comments', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn('posts', 'views', 'INTEGER NOT NULL DEFAULT 0')
   ensureColumn('posts', 'updated_at', "TEXT NOT NULL DEFAULT ''")
 
   ensureColumn('stories', 'description', "TEXT NOT NULL DEFAULT ''")
@@ -737,7 +738,11 @@ function runMigrations() {
   ensureColumn('stories', 'media_type', "TEXT NOT NULL DEFAULT ''")
   ensureColumn('stories', 'metadata_json', "TEXT NOT NULL DEFAULT ''")
   ensureColumn('stories', 'reactions', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn('stories', 'views', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn('stories', 'comments', 'INTEGER NOT NULL DEFAULT 0')
   ensureColumn('stories', 'expires_at', "TEXT NOT NULL DEFAULT ''")
+
+  ensureColumn('live_recordings', 'views', 'INTEGER NOT NULL DEFAULT 0')
 
   ensureColumn('music_library', 'artist', "TEXT NOT NULL DEFAULT ''")
   ensureColumn('music_library', 'genre', "TEXT NOT NULL DEFAULT ''")
@@ -967,6 +972,7 @@ const selectPostsStmt = db.prepare(`
     p.location,
     p.reactions,
     p.comments,
+    p.views,
     p.created_at,
     p.updated_at,
     u.display_name,
@@ -988,6 +994,7 @@ const selectPostsByOwnerStmt = db.prepare(`
     p.location,
     p.reactions,
     p.comments,
+    p.views,
     p.created_at,
     p.updated_at,
     u.display_name,
@@ -1010,6 +1017,7 @@ const selectPostByIdStmt = db.prepare(`
     p.location,
     p.reactions,
     p.comments,
+    p.views,
     p.created_at,
     p.updated_at,
     u.display_name,
@@ -1070,6 +1078,12 @@ const incrementPostCommentsStmt = db.prepare(`
   WHERE id = ?
 `)
 
+const incrementPostViewsStmt = db.prepare('UPDATE posts SET views = views + 1 WHERE id = ?')
+const incrementStoryViewsStmt = db.prepare('UPDATE stories SET views = views + 1 WHERE id = ?')
+const incrementLiveRecordingViewsStmt = db.prepare(
+  'UPDATE live_recordings SET views = views + 1 WHERE id = ?',
+)
+
 const insertPostCommentStmt = db.prepare(`
   INSERT INTO post_comments (
     id, post_id, user_id, text, created_at
@@ -1108,6 +1122,8 @@ const selectStoriesByOwnerStmt = db.prepare(`
     media_type,
     metadata_json,
     reactions,
+    views,
+    comments,
     expires_at,
     created_at
   FROM stories
@@ -1126,6 +1142,8 @@ const selectActiveStoriesStmt = db.prepare(`
     s.media_type,
     s.metadata_json,
     s.reactions,
+    s.views,
+    s.comments,
     s.expires_at,
     s.created_at,
     u.display_name,
@@ -1148,6 +1166,8 @@ const selectStoryByIdStmt = db.prepare(`
     media_type,
     metadata_json,
     reactions,
+    views,
+    comments,
     expires_at,
     created_at
   FROM stories
@@ -1339,7 +1359,7 @@ const insertLiveRecordingStmt = db.prepare(`
 `)
 
 const selectLiveRecordingsByOwnerStmt = db.prepare(`
-  SELECT id, owner_user_id, session_id, title, media_url, media_type, duration_sec, visibility, created_at, expires_at
+  SELECT id, owner_user_id, session_id, title, media_url, media_type, duration_sec, visibility, views, created_at, expires_at
   FROM live_recordings
   WHERE owner_user_id = ? AND expires_at > ?
   ORDER BY created_at DESC
@@ -1347,7 +1367,7 @@ const selectLiveRecordingsByOwnerStmt = db.prepare(`
 `)
 
 const selectLiveRecordingByIdStmt = db.prepare(`
-  SELECT id, owner_user_id, session_id, title, media_url, media_type, duration_sec, visibility, created_at, expires_at
+  SELECT id, owner_user_id, session_id, title, media_url, media_type, duration_sec, visibility, views, created_at, expires_at
   FROM live_recordings
   WHERE id = ?
   LIMIT 1
@@ -1641,6 +1661,7 @@ function mapPostRow(row, options = {}) {
     caption: row.caption || '',
     reactions: Number(row.reactions ?? 0),
     comments: Number(row.comments ?? 0),
+    views: Number(row.views ?? 0),
     tone: 'new',
     mediaUrl,
     createdAt: row.created_at || nowIso(),
@@ -1661,6 +1682,8 @@ function mapStoryRow(row, options = {}) {
     mediaUrl: row.media_url || '',
     mediaType: row.media_type || '',
     reactions: Number(row.reactions ?? 0),
+    comments: Number(row.comments ?? 0),
+    views: Number(row.views ?? 0),
     createdAt: row.created_at,
     expiresAt: row.expires_at,
     editor: metadata?.editor || undefined,
@@ -2998,6 +3021,7 @@ function mapLiveRecordingRow(row) {
     mediaType: row.media_type || 'video/webm',
     durationSec: Number(row.duration_sec ?? 0),
     visibility: normalizeProfileVisibility(row.visibility),
+    views: Number(row.views ?? 0),
     createdAt: row.created_at || '',
     expiresAt: row.expires_at || '',
   }
@@ -4930,6 +4954,44 @@ app.get('/api/content/users/:username/recordings', (req, res) => {
     .filter((row) => normalizeProfileVisibility(row.visibility) === 'public' || viewer?.id === target.id)
 
   res.json({ items: rows.map(mapLiveRecordingRow) })
+})
+
+// Conteo de vistas (modo biblioteca). Fire-and-forget: el cliente marca cada
+// id una sola vez por sesión, aquí solo incrementamos.
+app.post('/api/content/posts/:postId/view', (req, res) => {
+  const postId = safeString(req.params?.postId)
+  if (postId) {
+    try {
+      incrementPostViewsStmt.run(postId)
+    } catch {
+      // publicación inexistente: ignoramos
+    }
+  }
+  res.json({ ok: true })
+})
+
+app.post('/api/content/stories/:storyId/view', (req, res) => {
+  const storyId = safeString(req.params?.storyId)
+  if (storyId) {
+    try {
+      incrementStoryViewsStmt.run(storyId)
+    } catch {
+      // historia inexistente: ignoramos
+    }
+  }
+  res.json({ ok: true })
+})
+
+app.post('/api/content/live/recordings/:recordingId/view', (req, res) => {
+  const recordingId = safeString(req.params?.recordingId)
+  if (recordingId) {
+    try {
+      incrementLiveRecordingViewsStmt.run(recordingId)
+    } catch {
+      // grabación inexistente: ignoramos
+    }
+  }
+  res.json({ ok: true })
 })
 
 app.get('/api/content/music-library', (req, res) => {

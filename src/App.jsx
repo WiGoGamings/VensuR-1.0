@@ -125,7 +125,7 @@ function App() {
                     <p className="route-message">Verificando sesion...</p>
                   </section>
                 ) : isAuthenticated ? (
-                  <PerfilPage posts={posts} likedPostIds={likedPostIds} />
+                  <PerfilPage posts={posts} />
                 ) : (
                   <Navigate to="/acceso" replace state={{ from: location.pathname }} />
                 )

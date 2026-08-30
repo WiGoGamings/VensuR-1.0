@@ -32,6 +32,7 @@ function toLegacyPost(apiPost) {
     caption: apiPost.caption ?? '',
     reactions: Number(apiPost.reactions ?? 0),
     comments: Number(apiPost.comments ?? 0),
+    views: Number(apiPost.views ?? 0),
     tone: apiPost.tone ?? 'new',
     mediaUrl: apiPost.mediaUrl ?? '',
     createdAt: apiPost.createdAt ?? new Date().toISOString(),
@@ -108,6 +109,23 @@ export async function updatePostReactions(postId, delta) {
   return {
     post: response.post ? toLegacyPost(response.post) : null,
     liked: Boolean(response.liked),
+  }
+}
+
+const viewedPostIds = new Set()
+
+/**
+ * Suma una vista a la publicación (una sola vez por sesión de navegador).
+ * @param {string | number} postId
+ */
+export async function markPostViewed(postId) {
+  const key = String(postId ?? '')
+  if (!key || viewedPostIds.has(key)) return
+  viewedPostIds.add(key)
+  try {
+    await httpRequest(`/api/content/posts/${encodeURIComponent(key)}/view`, { method: 'POST' })
+  } catch {
+    viewedPostIds.delete(key)
   }
 }
 

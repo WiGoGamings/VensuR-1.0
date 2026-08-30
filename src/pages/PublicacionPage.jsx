@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { createPostComment, getPostComments } from '../services/postsApi'
+import { createPostComment, getPostComments, markPostViewed } from '../services/postsApi'
 import './Pages.css'
 
 function getLocation(meta) {
@@ -86,6 +86,11 @@ export default function PublicacionPage({ posts, isLoading }) {
       })
     }
   }, [hasAudioTrack, isMuted, post?.id])
+
+  useEffect(() => {
+    if (!post?.id) return
+    void markPostViewed(post.id)
+  }, [post?.id])
 
   useEffect(() => {
     if (!post?.id) return

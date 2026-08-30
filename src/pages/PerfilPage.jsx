@@ -10,7 +10,7 @@ import {
 } from '../services/botsApi'
 import { createStory, getMyStories } from '../services/storiesApi'
 import { getMyPosts } from '../services/postsApi'
-import { deleteRecording, getMyRecordings } from '../services/recordingsApi'
+import { deleteRecording, getMyRecordings, markRecordingViewed } from '../services/recordingsApi'
 import { useLiveBroadcast } from '../contexts/LiveBroadcastContext'
 import './Pages.css'
 
@@ -264,24 +264,152 @@ function normalizeCoverImageFile(file, targetWidth = COVER_IMAGE_WIDTH, targetHe
 
 const profileTabs = ['Publicaciones', 'Historias', 'Denuncias', 'Guardado']
 
-const profileCells = [
-  { id: 'cell-1', badge: 'HISTORIA', badgeClass: 'historia' },
-  { id: 'cell-2', badge: 'DENUNCIA', badgeClass: 'denuncia' },
-  { id: 'cell-3', badge: 'HISTORIA', badgeClass: 'historia' },
-  { id: 'cell-4', badge: 'EN VIVO', badgeClass: 'live' },
-  { id: 'cell-5' },
-  { id: 'cell-6', badge: 'DENUNCIA', badgeClass: 'denuncia' },
-  { id: 'cell-7', badge: 'HISTORIA', badgeClass: 'historia' },
-  { id: 'cell-8' },
+const profileTabsLabels = {
+  Publicaciones: { empty: 'Aún no has subido publicaciones. Usa el botón + para crear la primera.' },
+  Historias: { empty: 'Aún no tienes historias publicadas.' },
+  Denuncias: { empty: 'No se detectaron denuncias en tus publicaciones todavía.' },
+  Guardado: { empty: 'Aún no tienes grabaciones. Haz un en vivo y se guardará aquí automáticamente.' },
+}
+
+const TILE_VIDEO_RE = /\.(mp4|webm|mov|m4v)(\?|$)/i
+const TILE_AUDIO_RE = /\.(mp3|wav|ogg|m4a|aac|flac)(\?|$)/i
+
+const TILE_GRADIENTS = [
+  'linear-gradient(150deg, #334862, #861d32)',
+  'linear-gradient(150deg, #704b28, #262a36)',
+  'linear-gradient(150deg, #283c68, #551f32)',
+  'linear-gradient(150deg, #395a3c, #1d2530)',
+  'linear-gradient(150deg, #38596a, #4f2d47)',
+  'linear-gradient(150deg, #24489d, #12b5a5)',
 ]
+
+/** @param {unknown} value */
+function formatCount(value) {
+  const n = Math.max(0, Math.round(Number(value) || 0))
+  if (n < 1000) return String(n)
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`.replace('.0k', 'k')
+  return `${(n / 1_000_000).toFixed(1)}M`.replace('.0M', 'M')
+}
+
+/** @param {unknown} seconds */
+function formatDuration(seconds) {
+  const s = Math.max(0, Math.round(Number(seconds) || 0))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+function classifyTileMedia(mediaUrl, mediaType) {
+  const url = typeof mediaUrl === 'string' ? mediaUrl : ''
+  const type = typeof mediaType === 'string' ? mediaType : ''
+  if (!url) return 'text'
+  if (type.startsWith('video/') || TILE_VIDEO_RE.test(url)) return 'video'
+  if (type.startsWith('audio/') || TILE_AUDIO_RE.test(url)) return 'audio'
+  return 'image'
+}
+
+function hideBrokenTileImage(event) {
+  const el = event.currentTarget
+  el.style.display = 'none'
+  el.closest?.('.lib-tile__media')?.classList.add('media-failed')
+}
+
+/**
+ * Tarjeta en "modo biblioteca": miniatura + contadores de likes, comentarios y vistas.
+ * @param {{
+ *  item: any,
+ *  index?: number,
+ *  kind: 'post' | 'story' | 'denuncia' | 'recording',
+ *  subtitle?: string,
+ *  onOpen?: (item: any) => void,
+ *  onDelete?: () => void
+ * }} props
+ */
+function LibraryTile({ item, index = 0, kind, subtitle = '', onOpen, onDelete }) {
+  const [isPlaying, setIsPlaying] = useState(false)
+  const media = classifyTileMedia(item.mediaUrl, item.mediaType)
+  const title =
+    item.title || item.caption || (kind === 'story' ? 'Historia' : 'Publicación ciudadana')
+  const gradient = TILE_GRADIENTS[index % TILE_GRADIENTS.length]
+  const playable = media === 'video' || media === 'audio'
+
+  const badge =
+    kind === 'recording'
+      ? formatDuration(item.durationSec)
+      : kind === 'story'
+        ? 'Historia'
+        : kind === 'denuncia'
+          ? 'Denuncia'
+          : media === 'video'
+            ? 'Video'
+            : null
+
+  function handleActivate() {
+    if (kind === 'recording' && playable) {
+      setIsPlaying(true)
+      void markRecordingViewed(item.id)
+      return
+    }
+    if (typeof onOpen === 'function') onOpen(item)
+  }
+
+  return (
+    <article className={`lib-tile lib-tile--${kind}`}>
+      <button
+        aria-label={`Abrir ${title}`}
+        className="lib-tile__media"
+        onClick={handleActivate}
+        style={{ background: gradient }}
+        type="button"
+      >
+        {isPlaying && playable ? (
+          <video autoPlay className="lib-tile__player" controls preload="metadata" src={item.mediaUrl} />
+        ) : media === 'image' ? (
+          <img
+            alt=""
+            className="lib-tile__img"
+            decoding="async"
+            loading="lazy"
+            onError={hideBrokenTileImage}
+            src={item.mediaUrl}
+          />
+        ) : media === 'video' ? (
+          <>
+            <video className="lib-tile__img" muted playsInline preload="metadata" src={`${item.mediaUrl}#t=0.1`} />
+            <span className="lib-tile__play" aria-hidden="true">▶</span>
+          </>
+        ) : (
+          <span className="lib-tile__fill-text">{title}</span>
+        )}
+
+        {badge ? <span className="lib-tile__badge">{badge}</span> : null}
+
+        <span className="lib-tile__stats" aria-hidden="true">
+          <b>♥ {formatCount(item.reactions)}</b>
+          <b>💬 {formatCount(item.comments)}</b>
+          <b>👁 {formatCount(item.views)}</b>
+        </span>
+      </button>
+
+      {media !== 'text' || subtitle || typeof onDelete === 'function' ? (
+        <div className="lib-tile__foot">
+          {media === 'text' ? null : <p className="lib-tile__title">{title}</p>}
+          {subtitle ? <small>{subtitle}</small> : null}
+          {typeof onDelete === 'function' ? (
+            <button className="lib-tile__del" onClick={onDelete} type="button">
+              Borrar ahora
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </article>
+  )
+}
 
 /**
  * @param {{
- * posts: import('../data/feedData').Post[],
- * likedPostIds: Array<string | number>
+ * posts: import('../data/feedData').Post[]
  * }} props
  */
-export default function PerfilPage({ posts, likedPostIds }) {
+export default function PerfilPage({ posts }) {
   const {
     user,
     updateProfile,
@@ -383,7 +511,6 @@ export default function PerfilPage({ posts, likedPostIds }) {
   }, [myPosts])
 
   const publicationCount = myPosts.length
-  const reactionCount = likedPostIds.length
 
   const metricsActivity = Array.isArray(metrics?.activity) ? metrics.activity : []
   const maxActivity = metricsActivity.reduce(
@@ -870,29 +997,12 @@ export default function PerfilPage({ posts, likedPostIds }) {
     }
   }
 
-  function renderPostCell(post, options = {}) {
-    const mediaUrl = typeof post?.mediaUrl === 'string' ? post.mediaUrl : ''
-    const hasMedia = Boolean(mediaUrl)
-    const isVideo = /\.(mp4|webm|mov|m4v)(\?|$)/i.test(mediaUrl)
-    const mediaLabel = hasMedia ? (isVideo ? 'VIDEO' : 'MEDIA') : 'TEXTO'
-    const createdLabel = post?.createdAt ? new Date(post.createdAt).toLocaleDateString('es-VE') : 'Reciente'
+  function openPost(post) {
+    if (post?.id) navigate(`/publicacion/${encodeURIComponent(String(post.id))}`)
+  }
 
-    return (
-      <article className="profile-post-card" key={options.key || post.id}>
-        <header className="profile-post-card-top">
-          <span className={`tag ${post.tagClass || 'historia'}`}>{post.tag || 'NUEVO'}</span>
-          <small>{createdLabel}</small>
-        </header>
-
-        <p>{post.caption || 'Publicacion ciudadana sin texto.'}</p>
-
-        <footer className="profile-post-card-foot">
-          <span>{post.location || 'Venezuela'}</span>
-          <span>{mediaLabel}</span>
-          <span>{Number(post.reactions || 0)} reacciones</span>
-        </footer>
-      </article>
-    )
+  function openStory(story) {
+    if (story?.id) navigate(`/historias/${encodeURIComponent(String(story.id))}`)
   }
 
   function renderActiveTab() {
@@ -902,20 +1012,20 @@ export default function PerfilPage({ posts, likedPostIds }) {
           {storiesError ? <p className="route-message error">{storiesError}</p> : null}
 
           {stories.length ? (
-            <div className="profile-story-list profile-story-list-extended">
-              {stories.map((story) => (
-                <article className="profile-story-item" key={story.id}>
-                  <div className="profile-story-item-head">
-                    <b>{story.title}</b>
-                    <small>{story.reactions ?? 0} reacciones</small>
-                  </div>
-                  <p>{story.description || 'Sin descripcion'}</p>
-                  <small>Expira: {new Date(story.expiresAt).toLocaleString('es-VE')}</small>
-                </article>
+            <div className="profile-library">
+              {stories.map((story, i) => (
+                <LibraryTile
+                  index={i}
+                  item={story}
+                  key={story.id}
+                  kind="story"
+                  onOpen={openStory}
+                  subtitle={`caduca ${new Date(story.expiresAt).toLocaleDateString('es-VE')}`}
+                />
               ))}
             </div>
           ) : (
-            <p className="route-message">Aun no tienes historias publicadas.</p>
+            <p className="route-message">{profileTabsLabels.Historias.empty}</p>
           )}
         </section>
       )
@@ -934,39 +1044,30 @@ export default function PerfilPage({ posts, likedPostIds }) {
           ) : null}
 
           {recordings.length ? (
-            <div className="profile-recordings">
-              {recordings.map((rec) => {
+            <div className="profile-library">
+              {recordings.map((rec, i) => {
                 const remainingH = Math.max(0, Math.round((new Date(rec.expiresAt).getTime() - Date.now()) / 3_600_000))
                 return (
-                  <article className="profile-recording" key={rec.id}>
-                    <video className="profile-recording-video" controls preload="metadata" src={rec.mediaUrl} />
-                    <div className="profile-recording-body">
-                      <b>{rec.title}</b>
-                      <small>
-                        {rec.durationSec ? `${Math.floor(rec.durationSec / 60)}:${String(rec.durationSec % 60).padStart(2, '0')} · ` : ''}
-                        {rec.visibility === 'public' ? 'Pública' : 'Privada'} · caduca en ~{remainingH} h
-                      </small>
-                      <button
-                        className="profile-follow subtle"
-                        onClick={async () => {
-                          try {
-                            await deleteRecording(rec.id)
-                            setRecordings((current) => current.filter((item) => item.id !== rec.id))
-                          } catch {
-                            setRecordingsError('No se pudo borrar la grabación.')
-                          }
-                        }}
-                        type="button"
-                      >
-                        Borrar ahora
-                      </button>
-                    </div>
-                  </article>
+                  <LibraryTile
+                    index={i}
+                    item={rec}
+                    key={rec.id}
+                    kind="recording"
+                    onDelete={async () => {
+                      try {
+                        await deleteRecording(rec.id)
+                        setRecordings((current) => current.filter((item) => item.id !== rec.id))
+                      } catch {
+                        setRecordingsError('No se pudo borrar la grabación.')
+                      }
+                    }}
+                    subtitle={`${rec.visibility === 'public' ? 'Pública' : 'Privada'} · caduca en ~${remainingH} h`}
+                  />
                 )
               })}
             </div>
           ) : recordingStatus !== 'subiendo' ? (
-            <p className="route-message">Aún no tienes grabaciones. Haz un en vivo y se guardará aquí automáticamente.</p>
+            <p className="route-message">{profileTabsLabels.Guardado.empty}</p>
           ) : null}
         </section>
       )
@@ -1128,17 +1229,13 @@ export default function PerfilPage({ posts, likedPostIds }) {
       return (
         <section className="profile-tab-panel" aria-label="Publicaciones del perfil">
           {myPosts.length ? (
-            <div className="profile-post-list">
-              {myPosts.slice(0, 40).map((post) => renderPostCell(post, { key: `post-${post.id}` }))}
+            <div className="profile-library">
+              {myPosts.slice(0, 60).map((post, i) => (
+                <LibraryTile index={i} item={post} key={`post-${post.id}`} kind="post" onOpen={openPost} />
+              ))}
             </div>
           ) : (
-            <section className="profile-grid" aria-label="Galeria de publicaciones">
-              {profileCells.map((cell) => (
-                <article className="profile-cell" key={cell.id}>
-                  {cell.badge ? <span className={`tag ${cell.badgeClass}`}>{cell.badge}</span> : null}
-                </article>
-              ))}
-            </section>
+            <p className="route-message">{profileTabsLabels.Publicaciones.empty}</p>
           )}
         </section>
       )
@@ -1148,11 +1245,13 @@ export default function PerfilPage({ posts, likedPostIds }) {
       return (
         <section className="profile-tab-panel" aria-label="Denuncias del perfil">
           {myDenuncias.length ? (
-            <div className="profile-post-list">
-              {myDenuncias.slice(0, 24).map((post) => renderPostCell(post, { key: `denuncia-${post.id}` }))}
+            <div className="profile-library">
+              {myDenuncias.slice(0, 40).map((post, i) => (
+                <LibraryTile index={i} item={post} key={`denuncia-${post.id}`} kind="denuncia" onOpen={openPost} />
+              ))}
             </div>
           ) : (
-            <p className="route-message">No se detectaron denuncias en tus publicaciones aun.</p>
+            <p className="route-message">{profileTabsLabels.Denuncias.empty}</p>
           )}
         </section>
       )
@@ -1375,7 +1474,7 @@ export default function PerfilPage({ posts, likedPostIds }) {
             <span>Historias</span>
           </article>
           <article>
-            <b>{reactionCount}</b>
+            <b>{recordings.length}</b>
             <span>Guardados</span>
           </article>
         </div>
