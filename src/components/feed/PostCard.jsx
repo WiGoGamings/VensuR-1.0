@@ -9,6 +9,12 @@ function authorToHandle(author) {
   return author.toLowerCase().replaceAll(' ', '_')
 }
 
+function hideBrokenImage(event) {
+  const el = event.currentTarget
+  el.style.display = 'none'
+  el.closest?.('.post-media')?.classList.add('media-failed')
+}
+
 /**
  * @param {{
  * post: import('../../data/feedData').Post,
@@ -67,7 +73,7 @@ function PostCard({ post, liked, onToggleLike }) {
               src={post.mediaUrl}
             />
           ) : (
-            <img alt={post.media} className="post-media-file" decoding="async" loading="lazy" src={post.mediaUrl} />
+            <img alt={post.media} className="post-media-file" decoding="async" loading="lazy" onError={hideBrokenImage} src={post.mediaUrl} />
           )
         ) : (
           <div className="post-media-empty">

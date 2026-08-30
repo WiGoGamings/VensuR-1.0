@@ -97,6 +97,16 @@
   font: 700 11px Archivo, sans-serif;
 }
 
+.post-media.media-failed {
+  height: 0;
+  min-height: 0;
+}
+
+.post-media.media-failed::before,
+.post-media.media-failed::after {
+  display: none;
+}
+
 .post-media::before {
   content: '';
   position: absolute;

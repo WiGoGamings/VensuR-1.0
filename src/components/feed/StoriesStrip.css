@@ -22,7 +22,7 @@
   border-radius: 13px;
   overflow: hidden;
   cursor: pointer;
-  background: var(--panel-2);
+  background: linear-gradient(150deg, #2a3546, #171c25);
   box-shadow: inset 0 0 0 1px var(--line);
   transition: transform 0.14s ease, box-shadow 0.14s ease;
 }
@@ -95,8 +95,10 @@
 
 .story-card__ring img,
 .story-card__ring b {
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  inset: 3px;
+  width: auto;
+  height: auto;
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -106,6 +108,10 @@
   color: #fff;
   font-size: 12px;
   font-weight: 800;
+}
+
+.story-card__ring img {
+  border-color: var(--panel);
 }
 
 /* Nombre abajo */

@@ -242,19 +242,35 @@ function classifyCategories(titulo, resumen) {
   return categories
 }
 
+// Hosts que bloquean el hotlinking o firman las URLs (caducan -> 403 al mostrarlas).
+const BLOCKED_MEDIA_HOST_PATTERNS = [/(^|\.)images-worker\./i, /(^|\.)cdn-images\./i]
+
+function isUsableMediaUrl(value) {
+  try {
+    const parsed = new URL(value)
+    if (BLOCKED_MEDIA_HOST_PATTERNS.some((pattern) => pattern.test(parsed.hostname))) return false
+    for (const key of parsed.searchParams.keys()) {
+      const lower = key.toLowerCase()
+      if (['sig', 'signature', 'expires', 'exp', 'token'].includes(lower)) return false
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
 function normalizeMediaUrl(rawUrl) {
   const value = safeMediaCandidate(rawUrl)
   if (!value) return ''
 
-  if (value.startsWith('//')) {
-    return `https:${value}`
-  }
+  const absolute = value.startsWith('//')
+    ? `https:${value}`
+    : /^https?:\/\//i.test(value)
+      ? value
+      : ''
 
-  if (/^https?:\/\//i.test(value)) {
-    return value
-  }
-
-  return ''
+  if (!absolute) return ''
+  return isUsableMediaUrl(absolute) ? absolute : ''
 }
 
 function safeMediaCandidate(rawValue) {

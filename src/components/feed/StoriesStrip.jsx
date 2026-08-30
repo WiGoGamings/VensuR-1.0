@@ -35,6 +35,13 @@ function storyPath(storyId) {
   return `/historias/${encodeURIComponent(String(storyId))}`
 }
 
+// Si una imagen externa devuelve 403/404, la ocultamos y queda el degradado de fondo.
+function hideBrokenImage(event) {
+  const el = event.currentTarget
+  el.style.display = 'none'
+  el.closest?.('.story-card')?.classList.add('media-failed')
+}
+
 /**
  * @param {{ stories: import('../../data/feedData').StoryItem[] }} props
  */
@@ -61,7 +68,7 @@ function StoriesStrip({ stories }) {
           {user?.avatarUrl ? (
             <img alt="" decoding="async" loading="lazy" src={user.avatarUrl} />
           ) : firstWithImage ? (
-            <img alt="" decoding="async" loading="lazy" src={firstWithImage.mediaUrl} />
+            <img alt="" decoding="async" loading="lazy" onError={hideBrokenImage} src={firstWithImage.mediaUrl} />
           ) : (
             <span className="story-card__fill" style={{ background: GRADIENTS[5] }} />
           )}
@@ -91,7 +98,7 @@ function StoriesStrip({ stories }) {
           >
             <span className="story-card__media">
               {hasImage ? (
-                <img alt="" decoding="async" loading="lazy" src={story.mediaUrl} />
+                <img alt="" decoding="async" loading="lazy" onError={hideBrokenImage} src={story.mediaUrl} />
               ) : (
                 <span
                   className="story-card__fill"
@@ -110,7 +117,8 @@ function StoriesStrip({ stories }) {
             </span>
 
             <span className="story-card__ring">
-              {hasImage ? <img alt="" src={story.mediaUrl} /> : <b>{initialsOf(avatarName)}</b>}
+              <b>{initialsOf(avatarName)}</b>
+              {hasImage ? <img alt="" onError={hideBrokenImage} src={story.mediaUrl} /> : null}
             </span>
 
             {liveBadge ? (

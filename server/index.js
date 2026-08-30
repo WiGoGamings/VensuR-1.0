@@ -2127,12 +2127,34 @@ function inferMediaTypeFromUrl(url) {
   return ''
 }
 
+// Hosts que bloquean el hotlinking o firman las URLs (caducan -> 403 en el navegador).
+const BLOCKED_MEDIA_HOST_PATTERNS = [/(^|\.)images-worker\./i, /(^|\.)cdn-images\./i]
+
+function isUsableExternalMediaUrl(urlValue) {
+  try {
+    const parsed = new URL(urlValue)
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false
+    if (BLOCKED_MEDIA_HOST_PATTERNS.some((pattern) => pattern.test(parsed.hostname))) return false
+    // URLs firmadas: caducan y devuelven 403 poco después.
+    for (const key of parsed.searchParams.keys()) {
+      const lower = key.toLowerCase()
+      if (lower === 'sig' || lower === 'signature' || lower === 'expires' || lower === 'exp' || lower === 'token') {
+        return false
+      }
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
 function normalizeMediaUrl(rawUrl, baseUrl) {
   const decoded = safeString(rawUrl).replaceAll('&amp;', '&')
   if (!decoded) return ''
 
   try {
-    return new URL(decoded, baseUrl).toString()
+    const resolved = new URL(decoded, baseUrl).toString()
+    return isUsableExternalMediaUrl(resolved) ? resolved : ''
   } catch {
     return ''
   }

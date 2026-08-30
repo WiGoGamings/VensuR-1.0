@@ -28,6 +28,7 @@ export default memo(function TopBar({ links, currentUser, onLogout }) {
   const location = useLocation()
   const navigate = useNavigate()
   const [searchValue, setSearchValue] = useState(() => readSearchQuery(location.search))
+  const [isMenuOpen, setIsMenuOpen] = useState(false)
   const topNavLinks = links.filter((link) => TOP_NAV_ALLOWED_PATHS.has(link.path))
 
   useEffect(() => {
@@ -35,6 +36,20 @@ export default memo(function TopBar({ links, currentUser, onLogout }) {
       setSearchValue(readSearchQuery(location.search))
     }
   }, [location.pathname, location.search])
+
+  // Cierra el menú móvil al navegar o al pulsar Escape.
+  useEffect(() => {
+    setIsMenuOpen(false)
+  }, [location.pathname])
+
+  useEffect(() => {
+    if (!isMenuOpen) return undefined
+    const onKey = (event) => {
+      if (event.key === 'Escape') setIsMenuOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [isMenuOpen])
 
   const onSearchSubmit = (event) => {
     event.preventDefault()
@@ -55,6 +70,7 @@ export default memo(function TopBar({ links, currentUser, onLogout }) {
   }
 
   return (
+    <>
     <header className="topbar">
       <Link className="brand" to="/" aria-label="Venezuela en su realidad, inicio">
         <span className="brand-mark" aria-hidden="true">
@@ -125,9 +141,73 @@ export default memo(function TopBar({ links, currentUser, onLogout }) {
         )}
       </div>
 
-      <button className="mobile-menu" type="button" aria-label="Abrir menu">
-        ☰
+      <button
+        aria-expanded={isMenuOpen}
+        aria-label={isMenuOpen ? 'Cerrar menú' : 'Abrir menú'}
+        className="mobile-menu"
+        onClick={() => setIsMenuOpen((open) => !open)}
+        type="button"
+      >
+        {isMenuOpen ? '✕' : '☰'}
       </button>
     </header>
+
+      {isMenuOpen ? (
+        <div className="mobile-nav-backdrop" onClick={() => setIsMenuOpen(false)}>
+          <nav
+            className="mobile-nav-drawer"
+            aria-label="Menú de navegación"
+            onClick={(event) => event.stopPropagation()}
+          >
+            {currentUser ? (
+              <div className="mobile-nav-user">
+                {currentUser.avatarUrl ? (
+                  <img alt="" className="mobile-nav-avatar" src={currentUser.avatarUrl} />
+                ) : (
+                  <span className="mobile-nav-avatar fallback">
+                    {(currentUser.displayName || currentUser.username || 'VE').slice(0, 1).toUpperCase()}
+                  </span>
+                )}
+                <div>
+                  <b>{currentUser.displayName || currentUser.username}</b>
+                  <small>@{currentUser.username}</small>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="mobile-nav-links">
+              {links.map((link) => (
+                <NavLink
+                  className={({ isActive }) => (isActive ? 'active' : '')}
+                  end={link.path === '/'}
+                  key={link.label}
+                  to={link.path}
+                >
+                  {link.label}
+                  {link.badge ? <b>{link.badge}</b> : null}
+                </NavLink>
+              ))}
+            </div>
+
+            {currentUser ? (
+              <button
+                className="mobile-nav-logout"
+                onClick={() => {
+                  setIsMenuOpen(false)
+                  onLogout?.()
+                }}
+                type="button"
+              >
+                Cerrar sesión
+              </button>
+            ) : (
+              <Link className="mobile-nav-logout" to="/acceso">
+                Entrar o crear cuenta
+              </Link>
+            )}
+          </nav>
+        </div>
+      ) : null}
+    </>
   )
 })
