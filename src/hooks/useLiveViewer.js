@@ -49,6 +49,9 @@ export default function useLiveViewer() {
   const peerRef = useRef(null)
   const answerPollTimerRef = useRef(null)
   const ticketRef = useRef({ sessionId: '', viewerId: '' })
+  // Guarda de reentrada por ref: mantiene estable la identidad de `join`
+  // (si dependiera del estado `isJoining`, un efecto que lo llame entraría en bucle).
+  const isJoiningRef = useRef(false)
 
   const stopAnswerPolling = useCallback(() => {
     if (!answerPollTimerRef.current) return
@@ -144,8 +147,9 @@ export default function useLiveViewer() {
 
   const join = useCallback(
     async (sessionId) => {
-      if (!sessionId || isJoining) return
+      if (!sessionId || isJoiningRef.current) return
 
+      isJoiningRef.current = true
       setError('')
       setEnded(false)
       setStatus('Preparando conexión al en vivo…')
@@ -208,10 +212,11 @@ export default function useLiveViewer() {
         setError(joinError instanceof Error ? joinError.message : 'No se pudo abrir el en vivo.')
         await leave({ notifyServer: false })
       } finally {
+        isJoiningRef.current = false
         setIsJoining(false)
       }
     },
-    [isJoining, leave, startAnswerPolling],
+    [leave, startAnswerPolling],
   )
 
   useEffect(() => {
