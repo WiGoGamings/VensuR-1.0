@@ -9,6 +9,9 @@ import {
   updateBotsBehavior,
 } from '../services/botsApi'
 import { createStory, getMyStories } from '../services/storiesApi'
+import { getMyPosts } from '../services/postsApi'
+import { deleteRecording, getMyRecordings } from '../services/recordingsApi'
+import { useLiveBroadcast } from '../contexts/LiveBroadcastContext'
 import './Pages.css'
 
 const StoryStudio = lazy(() => import('../components/composer/StoryStudio'))
@@ -289,6 +292,7 @@ export default function PerfilPage({ posts, likedPostIds }) {
     authError,
     clearAuthError,
   } = useAuth()
+  const { recordingStatus } = useLiveBroadcast()
   const location = useLocation()
   const navigate = useNavigate()
   const createFlowFromQuery = useMemo(() => {
@@ -335,8 +339,12 @@ export default function PerfilPage({ posts, likedPostIds }) {
   const [creator, setCreator] = useState(() => (createFlowFromQuery === 'story' || createFlowFromQuery === 'post' ? createFlowFromQuery : ''))
   const [composerStatus, setComposerStatus] = useState('')
   const [localPosts, setLocalPosts] = useState([])
+  const [remotePosts, setRemotePosts] = useState([])
   const [stories, setStories] = useState([])
   const [storiesError, setStoriesError] = useState('')
+  const [recordings, setRecordings] = useState([])
+  const [recordingsTtlHours, setRecordingsTtlHours] = useState(72)
+  const [recordingsError, setRecordingsError] = useState('')
   const [metrics, setMetrics] = useState(null)
   const [metricsError, setMetricsError] = useState('')
   const [isMetricsLoading, setIsMetricsLoading] = useState(false)
@@ -355,18 +363,15 @@ export default function PerfilPage({ posts, likedPostIds }) {
   const myPosts = useMemo(() => {
     const merged = new Map()
 
-    for (const post of [...localPosts, ...remoteMyPosts]) {
+    for (const post of [...localPosts, ...remotePosts, ...remoteMyPosts]) {
       if (!post?.id || merged.has(post.id)) continue
       merged.set(post.id, post)
     }
 
-    return Array.from(merged.values())
-  }, [localPosts, remoteMyPosts])
-
-  const likedPosts = useMemo(
-    () => posts.filter((post) => likedPostIds.includes(post.id)),
-    [likedPostIds, posts],
-  )
+    return Array.from(merged.values()).sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
+    )
+  }, [localPosts, remotePosts, remoteMyPosts])
 
   const myDenuncias = useMemo(() => {
     const sensitivePattern = /(denunc|alert|operativo|corrup|deten|repres|violenc|ddhh|apag|crisis)/i
@@ -459,14 +464,51 @@ export default function PerfilPage({ posts, likedPostIds }) {
       }
     }
 
+    async function loadPosts() {
+      try {
+        const items = await getMyPosts()
+        if (isMounted) setRemotePosts(Array.isArray(items) ? items : [])
+      } catch {
+        // se mantiene la ventana del feed como respaldo
+      }
+    }
+
+    async function loadRecordings() {
+      try {
+        const response = await getMyRecordings()
+        if (!isMounted) return
+        setRecordings(Array.isArray(response.items) ? response.items : [])
+        if (Number.isFinite(Number(response.ttlHours))) setRecordingsTtlHours(Number(response.ttlHours))
+        setRecordingsError('')
+      } catch {
+        if (isMounted) setRecordingsError('No se pudieron cargar tus grabaciones guardadas.')
+      }
+    }
+
     if (user?.id) {
       loadStories()
+      loadPosts()
+      loadRecordings()
     }
 
     return () => {
       isMounted = false
     }
   }, [user?.id])
+
+  // Cuando termina de subir una grabación de en vivo, recarga la lista.
+  useEffect(() => {
+    if (recordingStatus !== 'guardada' || !user?.id) return
+    let isMounted = true
+    getMyRecordings()
+      .then((response) => {
+        if (isMounted) setRecordings(Array.isArray(response.items) ? response.items : [])
+      })
+      .catch(() => {})
+    return () => {
+      isMounted = false
+    }
+  }, [recordingStatus, user?.id])
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -881,14 +923,51 @@ export default function PerfilPage({ posts, likedPostIds }) {
 
     if (activeTab === 'Guardado') {
       return (
-        <section className="profile-tab-panel" aria-label="Guardados">
-          {likedPosts.length ? (
-            <div className="profile-post-list">
-              {likedPosts.slice(0, 30).map((post) => renderPostCell(post, { key: `saved-${post.id}` }))}
+        <section className="profile-tab-panel" aria-label="Grabaciones de en vivo guardadas">
+          <p className="route-message news-note">
+            Aquí se guardan tus transmisiones en vivo por {recordingsTtlHours} horas. Después se borran solas.
+          </p>
+
+          {recordingsError ? <p className="route-message error">{recordingsError}</p> : null}
+          {recordingStatus === 'subiendo' ? (
+            <p className="route-message news-note">Guardando la grabación de tu último en vivo…</p>
+          ) : null}
+
+          {recordings.length ? (
+            <div className="profile-recordings">
+              {recordings.map((rec) => {
+                const remainingH = Math.max(0, Math.round((new Date(rec.expiresAt).getTime() - Date.now()) / 3_600_000))
+                return (
+                  <article className="profile-recording" key={rec.id}>
+                    <video className="profile-recording-video" controls preload="metadata" src={rec.mediaUrl} />
+                    <div className="profile-recording-body">
+                      <b>{rec.title}</b>
+                      <small>
+                        {rec.durationSec ? `${Math.floor(rec.durationSec / 60)}:${String(rec.durationSec % 60).padStart(2, '0')} · ` : ''}
+                        {rec.visibility === 'public' ? 'Pública' : 'Privada'} · caduca en ~{remainingH} h
+                      </small>
+                      <button
+                        className="profile-follow subtle"
+                        onClick={async () => {
+                          try {
+                            await deleteRecording(rec.id)
+                            setRecordings((current) => current.filter((item) => item.id !== rec.id))
+                          } catch {
+                            setRecordingsError('No se pudo borrar la grabación.')
+                          }
+                        }}
+                        type="button"
+                      >
+                        Borrar ahora
+                      </button>
+                    </div>
+                  </article>
+                )
+              })}
             </div>
-          ) : (
-            <p className="route-message">Aun no has marcado publicaciones para seguir.</p>
-          )}
+          ) : recordingStatus !== 'subiendo' ? (
+            <p className="route-message">Aún no tienes grabaciones. Haz un en vivo y se guardará aquí automáticamente.</p>
+          ) : null}
         </section>
       )
     }

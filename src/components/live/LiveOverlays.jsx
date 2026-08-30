@@ -51,6 +51,7 @@ function LiveMonitor() {
     sharePath,
     isStopping,
     error,
+    recordingStatus,
     closeMonitor,
     stopBroadcast,
   } = useLiveBroadcast()
@@ -127,6 +128,14 @@ function LiveMonitor() {
                 <p className="live-monitor-empty">Aún nadie se ha conectado. Comparte el enlace.</p>
               )}
             </div>
+
+            {recordingStatus === 'grabando' ? (
+              <p className="live-monitor-rec">
+                <i aria-hidden="true" /> Grabando · se guardará en tu perfil (Guardado) por 72 h
+              </p>
+            ) : recordingStatus === 'limite' ? (
+              <p className="live-monitor-rec">Grabación al límite de tamaño: se guardará lo grabado hasta ahora.</p>
+            ) : null}
 
             {error ? <p className="live-monitor-error">{error}</p> : null}
           </aside>

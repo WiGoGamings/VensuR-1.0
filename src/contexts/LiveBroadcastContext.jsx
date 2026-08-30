@@ -6,10 +6,23 @@ import {
   stopLiveSession,
   submitLiveViewerAnswer,
 } from '../services/liveApi'
+import { uploadLiveRecording } from '../services/recordingsApi'
 
 const LIVE_STUN_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
 const OFFERS_POLL_INTERVAL_MS = 1100
 const ICE_GATHERING_TIMEOUT_MS = 3500
+const RECORDING_MAX_BYTES = 150 * 1024 * 1024
+const RECORDING_MIME_CANDIDATES = [
+  'video/webm;codecs=vp9,opus',
+  'video/webm;codecs=vp8,opus',
+  'video/webm',
+  'video/mp4',
+]
+
+function pickRecorderMime() {
+  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') return ''
+  return RECORDING_MIME_CANDIDATES.find((mime) => MediaRecorder.isTypeSupported(mime)) || ''
+}
 
 // Activa logs de la señalización con: localStorage.setItem('vensur.live.debug','1')
 function liveLog(...args) {
@@ -51,7 +64,11 @@ export function LiveBroadcastProvider({ children }) {
   const pollingTimerRef = useRef(null)
   const processingOffersRef = useRef(new Set())
   const sessionIdRef = useRef('')
+  const recorderRef = useRef(null)
+  const recordedChunksRef = useRef([])
+  const recordedBytesRef = useRef(0)
 
+  const [recordingStatus, setRecordingStatus] = useState('')
   const [stream, setStream] = useState(null)
   const [isCameraReady, setIsCameraReady] = useState(false)
   const [includeAudio, setIncludeAudio] = useState(true)
@@ -101,12 +118,95 @@ export function LiveBroadcastProvider({ children }) {
     setIsCameraReady(false)
   }, [])
 
+  const startRecording = useCallback((sourceStream) => {
+    recordedChunksRef.current = []
+    recordedBytesRef.current = 0
+
+    if (typeof MediaRecorder === 'undefined' || !sourceStream) {
+      setRecordingStatus('')
+      return
+    }
+
+    try {
+      const mimeType = pickRecorderMime()
+      const recorder = new MediaRecorder(
+        sourceStream,
+        mimeType ? { mimeType, videoBitsPerSecond: 1_600_000 } : { videoBitsPerSecond: 1_600_000 },
+      )
+
+      recorder.ondataavailable = (event) => {
+        if (!event.data || event.data.size === 0) return
+        recordedBytesRef.current += event.data.size
+        recordedChunksRef.current.push(event.data)
+
+        if (recordedBytesRef.current > RECORDING_MAX_BYTES && recorder.state === 'recording') {
+          setRecordingStatus('limite')
+          try {
+            recorder.stop()
+          } catch {
+            // no-op
+          }
+        }
+      }
+
+      recorder.start(3000)
+      recorderRef.current = recorder
+      setRecordingStatus('grabando')
+    } catch {
+      recorderRef.current = null
+      setRecordingStatus('')
+    }
+  }, [])
+
+  /** Detiene el MediaRecorder y devuelve el Blob final (o null). */
+  const finalizeRecording = useCallback(() => {
+    const recorder = recorderRef.current
+    recorderRef.current = null
+
+    if (!recorder) return Promise.resolve(null)
+
+    return new Promise((resolve) => {
+      const finish = () => {
+        const chunks = recordedChunksRef.current
+        recordedChunksRef.current = []
+        if (!chunks.length) {
+          resolve(null)
+          return
+        }
+        resolve(new Blob(chunks, { type: recorder.mimeType || 'video/webm' }))
+      }
+
+      if (recorder.state === 'inactive') {
+        finish()
+        return
+      }
+      recorder.onstop = finish
+      try {
+        recorder.stop()
+      } catch {
+        finish()
+      }
+    })
+  }, [])
+
   const teardown = useCallback(
     (statusMessage) => {
       sessionIdRef.current = ''
       stopPollingInternal()
       closePeersInternal()
       stopStreamInternal()
+      // Si quedó un grabador sin finalizar (p. ej. corte por error), descartarlo.
+      if (recorderRef.current) {
+        try {
+          recorderRef.current.stop()
+        } catch {
+          // no-op
+        }
+        recorderRef.current = null
+        recordedChunksRef.current = []
+        recordedBytesRef.current = 0
+        setRecordingStatus('')
+      }
       setIsLive(false)
       setIsPreparing(false)
       setIsStarting(false)
@@ -318,6 +418,7 @@ export function LiveBroadcastProvider({ children }) {
         setIsLive(true)
         setStatus('En vivo. Tus seguidores ya pueden verte.')
 
+        startRecording(streamRef.current)
         startPolling(createdId)
         setIsStudioOpen(false)
         setIsMonitorOpen(true)
@@ -337,7 +438,7 @@ export function LiveBroadcastProvider({ children }) {
         setIsStarting(false)
       }
     },
-    [isCameraReady, isLive, isStarting, startPolling],
+    [isCameraReady, isLive, isStarting, startPolling, startRecording],
   )
 
   const stopBroadcast = useCallback(async () => {
@@ -346,6 +447,12 @@ export function LiveBroadcastProvider({ children }) {
     setError('')
 
     const id = sessionIdRef.current
+    const startedTs = startedAt
+    const recordingTitle = meta.title
+    const hadRecorder = Boolean(recorderRef.current)
+
+    const recordingBlob = await finalizeRecording()
+
     try {
       if (id) await stopLiveSession(id)
     } catch (stopError) {
@@ -354,7 +461,25 @@ export function LiveBroadcastProvider({ children }) {
       teardown('Transmisión finalizada.')
       setIsMonitorOpen(false)
     }
-  }, [isStopping, teardown])
+
+    if (recordingBlob && recordingBlob.size > 1024) {
+      setRecordingStatus('subiendo')
+      const durationSec = startedTs ? Math.max(0, Math.round((Date.now() - startedTs) / 1000)) : 0
+      try {
+        await uploadLiveRecording({
+          blob: recordingBlob,
+          title: recordingTitle,
+          sessionId: id,
+          durationSec,
+        })
+        setRecordingStatus('guardada')
+      } catch {
+        setRecordingStatus('error')
+      }
+    } else if (hadRecorder) {
+      setRecordingStatus('')
+    }
+  }, [finalizeRecording, isStopping, meta.title, startedAt, teardown])
 
   const clearError = useCallback(() => setError(''), [])
   const openStudio = useCallback(() => {
@@ -413,6 +538,7 @@ export function LiveBroadcastProvider({ children }) {
       startedAt,
       status,
       error,
+      recordingStatus,
       isStudioOpen,
       isMonitorOpen,
       // acciones
@@ -428,7 +554,7 @@ export function LiveBroadcastProvider({ children }) {
     }),
     [
       stream, isCameraReady, includeAudio, isPreparing, isStarting, isLive, isStopping,
-      sessionId, sharePath, meta, viewerCount, viewers, startedAt, status, error,
+      sessionId, sharePath, meta, viewerCount, viewers, startedAt, status, error, recordingStatus,
       isStudioOpen, isMonitorOpen, prepareCamera, startBroadcast, stopBroadcast,
       openStudio, closeStudio, openMonitor, closeMonitor, clearError,
     ],

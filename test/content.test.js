@@ -186,6 +186,79 @@ test('la biblioteca de musica devuelve pistas', async () => {
   assert.ok(body.items[0].id)
 })
 
+test('GET /api/content/me/posts devuelve todas las publicaciones del usuario', async () => {
+  const author = await createVerifiedUser(server.baseUrl, { visibility: 'public' })
+
+  for (let i = 0; i < 3; i += 1) {
+    const form = new FormData()
+    form.append('caption', `Post propio ${i}`)
+    await fetch(`${server.baseUrl}/api/content/me/posts`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${author.token}` },
+      body: form,
+    })
+  }
+
+  const res = await fetch(`${server.baseUrl}/api/content/me/posts`, { headers: authHeaders(author.token) })
+  assert.equal(res.status, 200)
+  const body = await res.json()
+  assert.ok(body.items.length >= 3)
+  assert.ok(body.items.every((item) => typeof item.caption === 'string'))
+})
+
+test('grabaciones de en vivo: subir, listar, visibilidad y borrar', async () => {
+  const owner = await createVerifiedUser(server.baseUrl, { visibility: 'public' })
+  const stranger = await createVerifiedUser(server.baseUrl, { visibility: 'public' })
+
+  const fakeVideo = new Blob([new Uint8Array(2048)], { type: 'video/webm' })
+  const form = new FormData()
+  form.append('media', fakeVideo, 'grabacion.webm')
+  form.append('title', 'Mi transmisión de prueba')
+  form.append('durationSec', '42')
+
+  const uploadRes = await fetch(`${server.baseUrl}/api/content/live/recordings`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${owner.token}` },
+    body: form,
+  })
+  assert.equal(uploadRes.status, 201)
+  const uploadBody = await uploadRes.json()
+  assert.equal(uploadBody.ttlHours, 72)
+  assert.equal(uploadBody.recording.title, 'Mi transmisión de prueba')
+  assert.equal(uploadBody.recording.visibility, 'public')
+  assert.ok(new Date(uploadBody.recording.expiresAt).getTime() > Date.now())
+  const recordingId = uploadBody.recording.id
+
+  const mine = await (await fetch(`${server.baseUrl}/api/content/me/recordings`, { headers: authHeaders(owner.token) })).json()
+  assert.equal(mine.items.length, 1)
+
+  // Un extraño ve la grabación pública del owner.
+  const publicView = await (await fetch(`${server.baseUrl}/api/content/users/${owner.username}/recordings`, {
+    headers: authHeaders(stranger.token),
+  })).json()
+  assert.equal(publicView.items.length, 1)
+
+  // Si el owner se hace privado, el extraño (no amigo) ya no la ve.
+  await fetch(`${server.baseUrl}/api/auth/me`, {
+    method: 'PATCH',
+    headers: authHeaders(owner.token),
+    body: JSON.stringify({ profileVisibility: 'private' }),
+  })
+  const privateView = await (await fetch(`${server.baseUrl}/api/content/users/${owner.username}/recordings`, {
+    headers: authHeaders(stranger.token),
+  })).json()
+  assert.equal(privateView.items.length, 0)
+
+  // Borrar.
+  const delRes = await fetch(`${server.baseUrl}/api/content/me/recordings/${recordingId}`, {
+    method: 'DELETE',
+    headers: authHeaders(owner.token),
+  })
+  assert.equal(delRes.status, 200)
+  const afterDelete = await (await fetch(`${server.baseUrl}/api/content/me/recordings`, { headers: authHeaders(owner.token) })).json()
+  assert.equal(afterDelete.items.length, 0)
+})
+
 test('el SDP del en vivo conserva el CRLF final (setRemoteDescription no falla)', async () => {
   const owner = await createVerifiedUser(server.baseUrl, { visibility: 'public' })
 

@@ -1313,6 +1313,47 @@
   padding-right: 4px;
 }
 
+.profile-recordings {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+
+.profile-recording {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--panel-2);
+}
+
+.profile-recording-video {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  background: #000;
+  display: block;
+  object-fit: contain;
+}
+
+.profile-recording-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 12px;
+}
+
+.profile-recording-body b {
+  font-size: 14px;
+}
+
+.profile-recording-body small {
+  color: var(--muted);
+}
+
+.profile-recording-body button {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
 .profile-bots-panel {
   padding: 14px;
 }

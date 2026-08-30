@@ -65,6 +65,12 @@ export async function getPosts() {
   }
 }
 
+/** Todas las publicaciones del usuario autenticado (no solo la ventana del feed). @returns {Promise<Post[]>} */
+export async function getMyPosts() {
+  const payload = await httpRequest('/api/content/me/posts')
+  return Array.isArray(payload.items) ? payload.items.map(toLegacyPost) : []
+}
+
 /**
  * @param {{ caption: string, mediaFile: File | null, alsoStory?: boolean, location?: string }} payload
  * @returns {Promise<Post>}

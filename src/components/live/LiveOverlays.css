@@ -306,6 +306,23 @@
   font-size: 12px;
 }
 
+.live-monitor-rec {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.live-monitor-rec i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+  flex-shrink: 0;
+}
+
 .live-monitor-foot {
   display: flex;
   gap: 10px;

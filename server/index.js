@@ -469,6 +469,9 @@ const BOT_ACTIVITY_PRESETS = {
 const LIVE_STREAM_MAX_DURATION_MS = 4 * 60 * 60 * 1000
 const LIVE_STREAM_PENDING_OFFER_TTL_MS = 90_000
 const LIVE_STREAM_IDLE_VIEWER_TTL_MS = 12 * 60 * 1000
+const LIVE_RECORDING_TTL_HOURS = Number.parseInt(process.env.LIVE_RECORDING_TTL_HOURS ?? '72', 10) || 72
+const LIVE_RECORDING_MAX_BYTES = Number.parseInt(process.env.LIVE_RECORDING_MAX_BYTES ?? '', 10) || 180 * 1024 * 1024
+const LIVE_RECORDING_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
 const STORY_FILTER_NAMES = new Set([
   // Legado
   'none', 'warm', 'cold', 'mono', 'dramatic',
@@ -627,6 +630,20 @@ function runMigrations() {
       FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS live_recordings (
+      id TEXT PRIMARY KEY,
+      owner_user_id TEXT NOT NULL,
+      session_id TEXT NOT NULL DEFAULT '',
+      title TEXT NOT NULL DEFAULT '',
+      media_url TEXT NOT NULL,
+      media_type TEXT NOT NULL DEFAULT 'video/webm',
+      duration_sec INTEGER NOT NULL DEFAULT 0,
+      visibility TEXT NOT NULL DEFAULT 'private',
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS music_library (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -688,6 +705,8 @@ function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_stories_user_created_at ON stories(user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_live_streams_owner_status ON live_streams(owner_user_id, status, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_live_streams_status_started ON live_streams(status, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_live_recordings_owner_created ON live_recordings(owner_user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_live_recordings_expires ON live_recordings(expires_at);
     CREATE INDEX IF NOT EXISTS idx_music_library_active_updated ON music_library(is_active, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_music_library_title ON music_library(title);
     CREATE INDEX IF NOT EXISTS idx_friendships_user_id ON friendships(user_id);
@@ -957,6 +976,28 @@ const selectPostsStmt = db.prepare(`
   JOIN users u ON u.id = p.user_id
   ORDER BY p.created_at DESC
   LIMIT 300
+`)
+
+const selectPostsByOwnerStmt = db.prepare(`
+  SELECT
+    p.id,
+    p.user_id,
+    p.caption,
+    p.media_url,
+    p.media_type,
+    p.location,
+    p.reactions,
+    p.comments,
+    p.created_at,
+    p.updated_at,
+    u.display_name,
+    u.username,
+    u.profile_visibility
+  FROM posts p
+  JOIN users u ON u.id = p.user_id
+  WHERE p.user_id = ?
+  ORDER BY p.created_at DESC
+  LIMIT 500
 `)
 
 const selectPostByIdStmt = db.prepare(`
@@ -1289,6 +1330,33 @@ const closeDanglingLiveSessionsStmt = db.prepare(`
   UPDATE live_streams
   SET status = 'ended', ended_at = ?, updated_at = ?
   WHERE status = 'active'
+`)
+
+const insertLiveRecordingStmt = db.prepare(`
+  INSERT INTO live_recordings (
+    id, owner_user_id, session_id, title, media_url, media_type, duration_sec, visibility, created_at, expires_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`)
+
+const selectLiveRecordingsByOwnerStmt = db.prepare(`
+  SELECT id, owner_user_id, session_id, title, media_url, media_type, duration_sec, visibility, created_at, expires_at
+  FROM live_recordings
+  WHERE owner_user_id = ? AND expires_at > ?
+  ORDER BY created_at DESC
+  LIMIT 100
+`)
+
+const selectLiveRecordingByIdStmt = db.prepare(`
+  SELECT id, owner_user_id, session_id, title, media_url, media_type, duration_sec, visibility, created_at, expires_at
+  FROM live_recordings
+  WHERE id = ?
+  LIMIT 1
+`)
+
+const deleteLiveRecordingStmt = db.prepare(`DELETE FROM live_recordings WHERE id = ?`)
+
+const selectExpiredLiveRecordingsStmt = db.prepare(`
+  SELECT id, media_url FROM live_recordings WHERE expires_at <= ?
 `)
 
 const selectUserPostMetricsStmt = db.prepare(`
@@ -2898,6 +2966,46 @@ function mapLiveSessionRow(row, viewerUserId = '') {
   }
 }
 
+function mapLiveRecordingRow(row) {
+  return {
+    id: row.id,
+    ownerId: row.owner_user_id,
+    sessionId: row.session_id || '',
+    title: row.title || 'Transmisión en vivo',
+    mediaUrl: row.media_url || '',
+    mediaType: row.media_type || 'video/webm',
+    durationSec: Number(row.duration_sec ?? 0),
+    visibility: normalizeProfileVisibility(row.visibility),
+    createdAt: row.created_at || '',
+    expiresAt: row.expires_at || '',
+  }
+}
+
+function purgeExpiredLiveRecordings() {
+  let removed = 0
+
+  try {
+    const expired = selectExpiredLiveRecordingsStmt.all(nowIso())
+
+    for (const row of expired) {
+      const fileName = safeString(row.media_url).replace(/^\/uploads\//, '')
+      if (fileName && !fileName.includes('..') && !fileName.includes('/')) {
+        try {
+          unlinkSync(path.join(UPLOADS_DIR, fileName))
+        } catch {
+          // el archivo ya no existe: no pasa nada
+        }
+      }
+      deleteLiveRecordingStmt.run(row.id)
+      removed += 1
+    }
+  } catch (error) {
+    console.error('[recordings] error al limpiar grabaciones vencidas:', error?.message || error)
+  }
+
+  return removed
+}
+
 function mapPublicProfilePayload(row, viewerUserId = '') {
   const mappedUser = mapDirectoryUserRow(row)
   const isSelf = Boolean(viewerUserId && viewerUserId === row.id)
@@ -3233,6 +3341,22 @@ const upload = multer({
     }
 
     callback(null, true)
+  },
+})
+
+// Grabaciones de en vivo: pueden pesar más que un upload normal.
+const uploadRecording = multer({
+  storage,
+  limits: {
+    fileSize: LIVE_RECORDING_MAX_BYTES,
+  },
+  fileFilter(request, file, callback) {
+    void request
+    if (isVideoUploadFile(file) || (typeof file?.mimetype === 'string' && file.mimetype.startsWith('video/'))) {
+      callback(null, true)
+      return
+    }
+    callback(new Error('La grabación del en vivo debe ser un video.'))
   },
 })
 
@@ -4177,6 +4301,62 @@ app.post('/api/content/live/sessions/:sessionId/stop', requireAuth, (req, res) =
   })
 })
 
+app.post('/api/content/live/recordings', requireAuth, uploadRecording.single('media'), (req, res) => {
+  if (!req.file) {
+    sendError(res, 400, 'No se recibió la grabación del en vivo.')
+    return
+  }
+
+  const cleanupFile = () => {
+    if (typeof req.file?.path === 'string' && req.file.path) {
+      try {
+        unlinkSync(req.file.path)
+      } catch {
+        // no-op
+      }
+    }
+  }
+
+  const sessionId = safeString(req.body?.sessionId).slice(0, 40)
+  const title = cleanDisplayName(req.body?.title) || 'Transmisión en vivo'
+  const durationSec = Math.max(0, Math.min(4 * 60 * 60, Math.trunc(toNumeric(req.body?.durationSec))))
+
+  // Si se indica un sessionId, debe ser una transmisión del propio usuario.
+  if (sessionId) {
+    const session = readLiveSessionById(sessionId)
+    if (session && session.owner_user_id !== req.authUser.id) {
+      cleanupFile()
+      sendError(res, 403, 'No puedes guardar la grabación de otra transmisión.')
+      return
+    }
+  }
+
+  const visibility = normalizeProfileVisibility(req.authUser.profile_visibility)
+  const now = nowIso()
+  const expiresAt = new Date(Date.now() + LIVE_RECORDING_TTL_HOURS * 60 * 60 * 1000).toISOString()
+  const recordingId = nanoid()
+  const mediaUrl = `/uploads/${req.file.filename}`
+  const mediaType = safeString(req.file.mimetype) || 'video/webm'
+
+  insertLiveRecordingStmt.run(
+    recordingId,
+    req.authUser.id,
+    sessionId,
+    title,
+    mediaUrl,
+    mediaType,
+    durationSec,
+    visibility,
+    now,
+    expiresAt,
+  )
+
+  res.status(201).json({
+    recording: mapLiveRecordingRow(selectLiveRecordingByIdStmt.get(recordingId)),
+    ttlHours: LIVE_RECORDING_TTL_HOURS,
+  })
+})
+
 app.get('/api/content/live/sessions/:sessionId/offers', requireAuth, (req, res) => {
   const sessionId = safeString(req.params?.sessionId)
   if (!sessionId) {
@@ -4662,6 +4842,74 @@ app.get('/api/content/me/stories', requireAuth, (req, res) => {
   })
 })
 
+app.get('/api/content/me/posts', requireAuth, (req, res) => {
+  const likedPostIds = getLikedPostIdSet(req.authUser.id)
+  const rows = selectPostsByOwnerStmt.all(req.authUser.id)
+
+  res.json({
+    items: rows.map((row) => mapPostRow(row, { likedByViewer: likedPostIds.has(row.id) })),
+  })
+})
+
+app.get('/api/content/me/recordings', requireAuth, (req, res) => {
+  purgeExpiredLiveRecordings()
+  const rows = selectLiveRecordingsByOwnerStmt.all(req.authUser.id, nowIso())
+
+  res.json({
+    ttlHours: LIVE_RECORDING_TTL_HOURS,
+    items: rows.map(mapLiveRecordingRow),
+  })
+})
+
+app.delete('/api/content/me/recordings/:recordingId', requireAuth, (req, res) => {
+  const recordingId = safeString(req.params?.recordingId)
+  const row = recordingId ? selectLiveRecordingByIdStmt.get(recordingId) : null
+
+  if (!row || row.owner_user_id !== req.authUser.id) {
+    sendError(res, 404, 'Grabación no encontrada.')
+    return
+  }
+
+  const fileName = safeString(row.media_url).replace(/^\/uploads\//, '')
+  if (fileName && !fileName.includes('..') && !fileName.includes('/')) {
+    try {
+      unlinkSync(path.join(UPLOADS_DIR, fileName))
+    } catch {
+      // ya no existe
+    }
+  }
+  deleteLiveRecordingStmt.run(recordingId)
+
+  res.json({ ok: true })
+})
+
+app.get('/api/content/users/:username/recordings', (req, res) => {
+  const targetUsername = normalizeUsername(req.params?.username)
+  if (!targetUsername || !isValidUsername(targetUsername)) {
+    sendError(res, 400, 'Usuario invalido.')
+    return
+  }
+
+  const target = selectUserDirectoryProfileByUsernameStmt.get(targetUsername)
+  if (!target) {
+    sendError(res, 404, 'Usuario no encontrado.')
+    return
+  }
+
+  const viewer = resolveOptionalAuthUser(req)
+  if (!canViewerAccessUserContent(viewer?.id || '', target.id, target.profile_visibility)) {
+    res.json({ items: [] })
+    return
+  }
+
+  purgeExpiredLiveRecordings()
+  const rows = selectLiveRecordingsByOwnerStmt
+    .all(target.id, nowIso())
+    .filter((row) => normalizeProfileVisibility(row.visibility) === 'public' || viewer?.id === target.id)
+
+  res.json({ items: rows.map(mapLiveRecordingRow) })
+})
+
 app.get('/api/content/music-library', (req, res) => {
   const query = normalizeSearchQuery(req.query?.q)
   const limitRaw = typeof req.query?.limit === 'string' ? req.query.limit : ''
@@ -4842,7 +5090,14 @@ app.use((error, req, res, next) => {
   sendError(res, 500, 'Error interno del servidor.')
 })
 
+const recordingCleanupTimer = setInterval(() => {
+  const removed = purgeExpiredLiveRecordings()
+  if (removed > 0) console.log(`[recordings] ${removed} grabación(es) vencida(s) eliminadas`)
+}, LIVE_RECORDING_CLEANUP_INTERVAL_MS)
+if (typeof recordingCleanupTimer.unref === 'function') recordingCleanupTimer.unref()
+
 app.listen(API_PORT, () => {
   console.log(`VensuR API activa en http://127.0.0.1:${API_PORT}`)
+  purgeExpiredLiveRecordings()
   void startBotsAutomation()
 })
