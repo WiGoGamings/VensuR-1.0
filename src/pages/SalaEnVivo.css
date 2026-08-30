@@ -1,0 +1,449 @@
+.sala-page {
+  width: 100%;
+  min-width: 0;
+}
+
+.sala-guard {
+  margin: 24px 0;
+  padding: 24px;
+  display: grid;
+  gap: 10px;
+}
+
+.sala-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 16px;
+  align-items: start;
+}
+
+.sala-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* --- Encabezado --- */
+.sala-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sala-back {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 7px 12px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sala-head-title {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sala-head-title b {
+  display: block;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sala-head-title small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sala-head-meta {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sala-live-pill {
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--red);
+  color: #fff;
+  font: 800 11px Archivo, sans-serif;
+  letter-spacing: 0.03em;
+}
+
+.sala-live-pill.off {
+  background: #55606f;
+}
+
+.sala-viewers {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* --- Escenario de video --- */
+.sala-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+.sala-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.sala-stage-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 20px;
+  text-align: center;
+  color: #e8ecf3;
+  background: rgba(6, 9, 14, 0.72);
+  font-size: 14px;
+}
+
+.sala-back-link,
+.sala-stage-overlay a {
+  color: var(--gold);
+  font-weight: 700;
+}
+
+.sala-spinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+  animation: sala-spin 0.9s linear infinite;
+}
+
+@keyframes sala-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sala-stage-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  z-index: 2;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: none;
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+
+/* --- Corazones flotantes --- */
+.sala-hearts {
+  position: absolute;
+  left: 50%;
+  bottom: 40px;
+  z-index: 3;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.sala-heart {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  font-size: 30px;
+  transform: translateX(var(--x, 0));
+  animation: sala-heart-rise 1.1s ease-out forwards;
+}
+
+@keyframes sala-heart-rise {
+  0% {
+    opacity: 0;
+    transform: translate(var(--x, 0), 0) scale(0.6);
+  }
+  15% {
+    opacity: 1;
+    transform: translate(var(--x, 0), -14px) scale(1.1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(var(--x, 0) + 18px), -150px) scale(0.9);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sala-heart {
+    animation-duration: 0.4s;
+  }
+  .sala-spinner {
+    animation: none;
+  }
+}
+
+/* --- Acciones --- */
+.sala-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.sala-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sala-action:hover {
+  border-color: var(--gold);
+}
+
+.sala-action.like {
+  border-color: #713040;
+  background: #3b1924;
+  color: #ffe2e8;
+}
+
+.sala-action.like b {
+  font-weight: 800;
+}
+
+.sala-action:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.sala-share-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sala-error {
+  margin: 0;
+}
+
+/* --- Chat --- */
+.sala-chat {
+  position: sticky;
+  top: 84px;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 120px);
+  min-height: 420px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.sala-chat-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sala-chat-head b {
+  font-size: 14px;
+}
+
+.sala-chat-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.sala-chat-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 12px 12px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.sala-chat-empty {
+  margin: auto;
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.sala-msg {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.sala-msg-avatar {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: var(--blue);
+  color: #fff;
+  font: 800 10px Archivo, sans-serif;
+}
+
+.sala-msg-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.sala-msg p {
+  margin: 0;
+  color: #dde3ec;
+  font-size: 13px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.sala-msg p b {
+  color: #f2f4f9;
+  margin-right: 2px;
+}
+
+.sala-msg.mine p b {
+  color: var(--gold);
+}
+
+.sala-chat-error {
+  margin: 0;
+  padding: 6px 14px;
+  color: #ffb4b4;
+  font-size: 12px;
+}
+
+.sala-emojis {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+  max-height: 132px;
+  overflow-y: auto;
+}
+
+.sala-emojis button {
+  border: 0;
+  background: transparent;
+  font-size: 18px;
+  padding: 4px 0;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.sala-emojis button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.sala-chat-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.sala-emoji-toggle {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  font-size: 19px;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.sala-chat-form input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 9px 11px;
+  background: var(--search-bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.sala-send {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 9px;
+  padding: 9px 14px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sala-send:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- Responsive --- */
+@media (max-width: 960px) {
+  .sala-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sala-chat {
+    position: static;
+    height: 60vh;
+    min-height: 340px;
+  }
+}
+
+@media (max-width: 560px) {
+  .sala-stage {
+    border-radius: 0;
+    margin-inline: -12px;
+    width: calc(100% + 24px);
+  }
+
+  .sala-head-title b {
+    font-size: 14px;
+  }
+}

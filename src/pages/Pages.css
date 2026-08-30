@@ -1993,8 +1993,13 @@
 
 .vivo-page {
   display: grid;
+  align-content: start;
   gap: 14px;
   max-width: 1080px;
+}
+
+.vivo-directory-card {
+  align-self: start;
 }
 
 .vivo-empty {
@@ -2039,75 +2044,87 @@
   font-weight: 700;
 }
 
-.vivo-layout {
+.vivo-directory {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
-  gap: 12px;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
 }
 
-.vivo-player,
-.vivo-list {
+.vivo-directory-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 14px;
+  border-radius: 14px;
+  padding: 12px;
   background: var(--panel);
 }
 
-.vivo-player-top {
+.vivo-directory-avatar {
+  position: relative;
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--blue);
+  color: #fff;
+  font: 800 15px Archivo, sans-serif;
+  overflow: visible;
+}
+
+.vivo-directory-avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.vivo-directory-dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--red);
+  border: 2px solid var(--panel);
+}
+
+.vivo-directory-body {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 3px;
+}
+
+.vivo-directory-top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  margin-bottom: 8px;
-  color: #d8dfeb;
-  font-size: 12px;
+}
+
+.vivo-directory-top small {
+  color: var(--muted);
+  font-size: 11px;
   font-weight: 700;
 }
 
-.vivo-player h2 {
-  margin: 0 0 4px;
-  font-size: 18px;
+.vivo-directory-body b {
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.vivo-player p {
-  margin: 0 0 10px;
+.vivo-directory-body span {
   color: var(--muted);
   font-size: 12px;
 }
 
-.vivo-player-screen {
-  position: relative;
-  border: 1px solid #304061;
-  border-radius: 14px;
-  overflow: hidden;
-  background: #06090f;
-  min-height: 280px;
-  margin-bottom: 10px;
-}
-
-.vivo-player-video {
-  width: 100%;
-  max-height: 480px;
-  display: block;
-  object-fit: cover;
-}
-
-.vivo-player-screen span {
-  position: absolute;
-  inset: auto 10px 10px 10px;
-  border-radius: 8px;
-  padding: 8px;
-  color: #d4deef;
-  background: rgba(4, 7, 12, 0.66);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.vivo-player-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+.vivo-directory-card .vivo-btn {
+  flex: 0 0 auto;
 }
 
 .vivo-btn {
@@ -2129,50 +2146,6 @@
 .vivo-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-}
-
-.vivo-list h3 {
-  margin: 0 0 10px;
-  font-size: 15px;
-}
-
-.vivo-list-grid {
-  display: grid;
-  gap: 8px;
-}
-
-.vivo-list-card {
-  border: 1px solid #2f3f5f;
-  border-radius: 12px;
-  padding: 10px;
-  background: rgba(10, 15, 25, 0.75);
-  display: grid;
-  gap: 6px;
-}
-
-.vivo-list-card-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-}
-
-.vivo-list-card-head small {
-  color: #b9c8df;
-  font-size: 11px;
-}
-
-.vivo-list-card b {
-  font-size: 13px;
-}
-
-.vivo-list-card span {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.route-message.vivo-ok {
-  color: #8be5b8;
 }
 
 .route-message.vivo-error {

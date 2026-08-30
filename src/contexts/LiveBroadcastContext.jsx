@@ -411,7 +411,7 @@ export function LiveBroadcastProvider({ children }) {
         const startTs = Date.now()
         setSessionId(createdId)
         setMeta({ title: cleanTitle, description: (description || '').trim() })
-        setSharePath(payload?.sharePath || `/vivo?sesion=${encodeURIComponent(createdId)}`)
+        setSharePath(payload?.sharePath || `/directo/${encodeURIComponent(createdId)}`)
         setViewerCount(Math.max(0, Number(session.viewerCount ?? 0) || 0))
         setViewers([])
         setStartedAt(startTs)

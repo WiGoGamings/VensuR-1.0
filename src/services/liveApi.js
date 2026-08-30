@@ -96,3 +96,38 @@ export function leaveLiveViewer(sessionId, viewerId) {
     method: 'DELETE',
   })
 }
+
+/**
+ * Estado de la sala en vivo (chat efímero + likes acumulados).
+ * @param {string} sessionId
+ * @param {number} [sinceSeq] Solo devuelve mensajes con seq mayor a este.
+ * @returns {Promise<{ session: any, ended: boolean, likes: number, viewerCount: number, chat: Array<any>, latestSeq: number }>}
+ */
+export function getLiveRoom(sessionId, sinceSeq = 0) {
+  const query = sinceSeq > 0 ? `?sinceSeq=${encodeURIComponent(String(sinceSeq))}` : ''
+  return httpRequest(`/api/content/live/sessions/${toEncoded(sessionId)}/room${query}`)
+}
+
+/**
+ * @param {string} sessionId
+ * @param {string} text
+ * @returns {Promise<{ message: any, likes: number, viewerCount: number }>}
+ */
+export function sendLiveChatMessage(sessionId, text) {
+  return httpRequest(`/api/content/live/sessions/${toEncoded(sessionId)}/chat`, {
+    method: 'POST',
+    body: { text },
+  })
+}
+
+/**
+ * @param {string} sessionId
+ * @param {number} count Cantidad de likes a sumar (se limita en el servidor).
+ * @returns {Promise<{ likes: number, viewerCount: number }>}
+ */
+export function sendLiveLikes(sessionId, count = 1) {
+  return httpRequest(`/api/content/live/sessions/${toEncoded(sessionId)}/likes`, {
+    method: 'POST',
+    body: { count },
+  })
+}

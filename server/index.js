@@ -2872,10 +2872,53 @@ function ensureLiveRuntimeSession(sessionId) {
     liveRuntime.sessions.set(key, {
       offersByViewerId: new Map(),
       endedAt: '',
+      chat: [],
+      chatSeq: 0,
+      likes: 0,
     })
   }
 
   return liveRuntime.sessions.get(key)
+}
+
+const LIVE_CHAT_MAX_MESSAGES = 220
+const LIVE_CHAT_TEXT_MAX = 280
+const LIVE_LIKES_PER_REQUEST_MAX = 30
+
+function appendLiveChatMessage(sessionId, author, rawText) {
+  const runtime = ensureLiveRuntimeSession(sessionId)
+  if (!runtime) return null
+
+  const text = safeString(rawText).replace(/\s+/g, ' ').trim().slice(0, LIVE_CHAT_TEXT_MAX)
+  if (!text) return null
+
+  runtime.chatSeq += 1
+  const message = {
+    id: `${Date.now().toString(36)}-${runtime.chatSeq}`,
+    seq: runtime.chatSeq,
+    userId: author?.id || '',
+    username: author?.username || '',
+    displayName: author?.display_name || author?.username || 'Ciudadano VensuR',
+    avatarUrl: author?.avatar_url || '',
+    text,
+    createdAt: nowIso(),
+  }
+
+  runtime.chat.push(message)
+  if (runtime.chat.length > LIVE_CHAT_MAX_MESSAGES) {
+    runtime.chat.splice(0, runtime.chat.length - LIVE_CHAT_MAX_MESSAGES)
+  }
+
+  return message
+}
+
+function addLiveLikes(sessionId, rawCount) {
+  const runtime = ensureLiveRuntimeSession(sessionId)
+  if (!runtime) return 0
+
+  const count = Math.max(1, Math.min(LIVE_LIKES_PER_REQUEST_MAX, Math.trunc(toNumeric(rawCount)) || 1))
+  runtime.likes += count
+  return runtime.likes
 }
 
 function markLiveViewerLeft(sessionId, viewerId, leftAt = nowIso()) {
@@ -3008,6 +3051,7 @@ function mapLiveSessionRow(row, viewerUserId = '') {
     isOwner: viewerUserId === row.owner_user_id,
     canView: canViewerJoinLiveSession(viewerUserId, row.owner_user_id),
     viewerCount: getLiveViewerCount(row.id),
+    likes: liveRuntime.sessions.get(row.id)?.likes || 0,
   }
 }
 
@@ -3482,6 +3526,18 @@ const authRateLimiter = createRateLimiter({
   windowMs: Number.parseInt(process.env.AUTH_RATE_LIMIT_WINDOW_MS ?? '', 10) || 15 * 60 * 1000,
   max: Number.parseInt(process.env.AUTH_RATE_LIMIT_MAX ?? '', 10) || 40,
   message: 'Demasiados intentos de autenticacion. Espera unos minutos e intenta de nuevo.',
+})
+
+const liveChatRateLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 40,
+  message: 'Estás enviando mensajes muy rápido. Espera un momento.',
+})
+
+const liveLikesRateLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 240,
+  message: 'Demasiados likes seguidos. Espera un momento.',
 })
 
 function requireAuth(req, res, next) {
@@ -4314,7 +4370,7 @@ app.post('/api/content/live/sessions', requireAuth, (req, res) => {
 
   res.status(201).json({
     session: created ? mapLiveSessionRow(created, req.authUser.id) : null,
-    sharePath: `/vivo?sesion=${encodeURIComponent(sessionId)}`,
+    sharePath: `/directo/${encodeURIComponent(sessionId)}`,
   })
 })
 
@@ -4650,6 +4706,89 @@ app.delete('/api/content/live/sessions/:sessionId/viewers/:viewerId', requireAut
 
   res.json({
     ok: true,
+    viewerCount: getLiveViewerCount(sessionId),
+  })
+})
+
+// --- Sala en vivo dedicada: chat efímero + likes acumulados ---
+
+function resolveLiveRoomForViewer(req, res) {
+  const sessionId = safeString(req.params?.sessionId)
+  if (!sessionId) {
+    sendError(res, 400, 'Sesión en vivo inválida.')
+    return null
+  }
+
+  const session = readLiveSessionById(sessionId)
+  if (!session) {
+    sendError(res, 404, 'La transmisión no existe.')
+    return null
+  }
+
+  if (!canViewerJoinLiveSession(req.authUser.id, session.owner_user_id)) {
+    sendError(res, 403, 'Solo seguidores pueden entrar a esta sala en vivo.')
+    return null
+  }
+
+  return { sessionId, session }
+}
+
+app.get('/api/content/live/sessions/:sessionId/room', requireAuth, (req, res) => {
+  const resolved = resolveLiveRoomForViewer(req, res)
+  if (!resolved) return
+
+  const { sessionId, session } = resolved
+  const runtime = ensureLiveRuntimeSession(sessionId)
+  const sinceSeq = Math.max(0, Math.trunc(toNumeric(req.query?.sinceSeq)))
+  const chat = runtime.chat.filter((message) => message.seq > sinceSeq)
+
+  res.json({
+    session: mapLiveSessionRow(session, req.authUser.id),
+    ended: session.status !== 'active',
+    likes: runtime.likes,
+    viewerCount: getLiveViewerCount(sessionId),
+    chat,
+    latestSeq: runtime.chatSeq,
+  })
+})
+
+app.post('/api/content/live/sessions/:sessionId/chat', requireAuth, liveChatRateLimiter, (req, res) => {
+  const resolved = resolveLiveRoomForViewer(req, res)
+  if (!resolved) return
+
+  const { sessionId, session } = resolved
+  if (session.status !== 'active') {
+    sendError(res, 410, 'La transmisión ya finalizó.')
+    return
+  }
+
+  const message = appendLiveChatMessage(sessionId, req.authUser, req.body?.text)
+  if (!message) {
+    sendError(res, 400, 'Escribe un mensaje para enviar.')
+    return
+  }
+
+  res.status(201).json({
+    message,
+    likes: ensureLiveRuntimeSession(sessionId).likes,
+    viewerCount: getLiveViewerCount(sessionId),
+  })
+})
+
+app.post('/api/content/live/sessions/:sessionId/likes', requireAuth, liveLikesRateLimiter, (req, res) => {
+  const resolved = resolveLiveRoomForViewer(req, res)
+  if (!resolved) return
+
+  const { sessionId, session } = resolved
+  if (session.status !== 'active') {
+    sendError(res, 410, 'La transmisión ya finalizó.')
+    return
+  }
+
+  const likes = addLiveLikes(sessionId, req.body?.count)
+
+  res.json({
+    likes,
     viewerCount: getLiveViewerCount(sessionId),
   })
 })

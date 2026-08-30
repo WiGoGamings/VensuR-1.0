@@ -19,6 +19,7 @@ const PerfilPage = lazy(() => import('./pages/PerfilPage'))
 const PublicacionPage = lazy(() => import('./pages/PublicacionPage'))
 const UsuarioPage = lazy(() => import('./pages/UsuarioPage'))
 const VivoPage = lazy(() => import('./pages/VivoPage'))
+const SalaEnVivoPage = lazy(() => import('./pages/SalaEnVivoPage'))
 const LiveOverlays = lazy(() => import('./components/live/LiveOverlays'))
 
 function isPathMatch(pathname, matcher) {
@@ -117,6 +118,7 @@ function App() {
               }
             />
             <Route path="/vivo" element={<VivoPage />} />
+            <Route path="/directo/:sessionId" element={<SalaEnVivoPage />} />
             <Route
               path="/perfil"
               element={
