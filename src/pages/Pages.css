@@ -903,22 +903,95 @@
   margin-bottom: 18px;
   border-bottom: 1px solid var(--line);
   display: flex;
-  gap: 4px;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
 }
 
 .profile-tabs button {
+  flex: 0 0 auto;
   border: 0;
   border-bottom: 2px solid transparent;
-  padding: 12px 18px;
+  padding: 12px 16px;
   background: transparent;
   color: var(--muted);
   font-size: 13px;
   font-weight: 700;
+  cursor: pointer;
 }
 
 .profile-tabs button.active {
   color: var(--gold);
   border-bottom-color: var(--gold);
+}
+
+/* Botón + para crear contenido, al lado de las pestañas */
+.profile-create-menu {
+  position: relative;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.profile-create-plus {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: none;
+  background: var(--gold);
+  color: #181400;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.profile-create-plus:hover {
+  filter: brightness(1.05);
+}
+
+.profile-create-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-width: 150px;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+.profile-create-pop button {
+  border: none;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  padding: 9px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.profile-create-pop button:hover {
+  background: var(--panel-2);
+}
+
+.profile-create-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 6, 10, 0.8);
+  color: var(--text);
+  font-size: 15px;
 }
 
 .profile-tab-panel {

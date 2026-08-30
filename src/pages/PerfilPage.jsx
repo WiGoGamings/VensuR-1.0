@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { getCurrentUserMetrics } from '../services/authApi'
@@ -8,9 +8,11 @@ import {
   runBotsTick,
   updateBotsBehavior,
 } from '../services/botsApi'
-import { createPost } from '../services/postsApi'
 import { createStory, getMyStories } from '../services/storiesApi'
 import './Pages.css'
+
+const StoryStudio = lazy(() => import('../components/composer/StoryStudio'))
+const PostComposer = lazy(() => import('../components/composer/PostComposer'))
 
 const THEME_MODE_STORAGE_KEY = 'vensur.ui.theme'
 const PROFILE_DRAFT_STORAGE_PREFIX = 'vensur.profile.draft.'
@@ -330,40 +332,11 @@ export default function PerfilPage({ posts, likedPostIds }) {
   const coverInputRef = useRef(null)
   const avatarMenuRef = useRef(null)
   const settingsPanelRef = useRef(null)
-  const [composerMenuOpen, setComposerMenuOpen] = useState(false)
-  const [composerType, setComposerType] = useState(
-    () => createFlowFromQuery || (typeof storedProfileDraft?.composerType === 'string' ? storedProfileDraft.composerType : ''),
-  )
+  const [creator, setCreator] = useState(() => (createFlowFromQuery === 'story' || createFlowFromQuery === 'post' ? createFlowFromQuery : ''))
   const [composerStatus, setComposerStatus] = useState('')
-  const [composerError, setComposerError] = useState('')
   const [localPosts, setLocalPosts] = useState([])
   const [stories, setStories] = useState([])
   const [storiesError, setStoriesError] = useState('')
-  const [storyDraft, setStoryDraft] = useState(() => ({
-    title: typeof storedProfileDraft?.storyDraft?.title === 'string' ? storedProfileDraft.storyDraft.title : '',
-    description:
-      typeof storedProfileDraft?.storyDraft?.description === 'string'
-        ? storedProfileDraft.storyDraft.description
-        : '',
-  }))
-  const [storyFile, setStoryFile] = useState(null)
-  const [isStorySubmitting, setIsStorySubmitting] = useState(false)
-  const [postDraft, setPostDraft] = useState(
-    () => (typeof storedProfileDraft?.postDraft === 'string' ? storedProfileDraft.postDraft : ''),
-  )
-  const [postFile, setPostFile] = useState(null)
-  const [isPostSubmitting, setIsPostSubmitting] = useState(false)
-  const cameraVideoRef = useRef(null)
-  const cameraStreamRef = useRef(null)
-  const [cameraTarget, setCameraTarget] = useState('')
-  const [isCameraModalOpen, setIsCameraModalOpen] = useState(false)
-  const [cameraConsentAccepted, setCameraConsentAccepted] = useState(false)
-  const [isCameraPermissionBusy, setIsCameraPermissionBusy] = useState(false)
-  const [cameraCapturedFile, setCameraCapturedFile] = useState(null)
-  const [cameraCapturedUrl, setCameraCapturedUrl] = useState('')
-  const [cameraHint, setCameraHint] = useState('')
-  const [cameraError, setCameraError] = useState('')
-  const [isCameraStreamReady, setIsCameraStreamReady] = useState(false)
   const [metrics, setMetrics] = useState(null)
   const [metricsError, setMetricsError] = useState('')
   const [isMetricsLoading, setIsMetricsLoading] = useState(false)
@@ -558,18 +531,21 @@ export default function PerfilPage({ posts, likedPostIds }) {
   }, [avatarMenuOpen])
 
   useEffect(() => {
-    return () => {
-      const stream = cameraStreamRef.current
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop())
-        cameraStreamRef.current = null
-      }
+    if (creator !== 'menu') return undefined
 
-      if (cameraCapturedUrl) {
-        URL.revokeObjectURL(cameraCapturedUrl)
-      }
+    const close = (event) => {
+      if (event.type === 'keydown' && event.key !== 'Escape') return
+      if (event.type === 'pointerdown' && event.target?.closest?.('.profile-create-menu')) return
+      setCreator('')
     }
-  }, [cameraCapturedUrl])
+
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('keydown', close)
+    return () => {
+      document.removeEventListener('pointerdown', close)
+      document.removeEventListener('keydown', close)
+    }
+  }, [creator])
 
   useEffect(() => {
     if (!user?.id) return
@@ -582,14 +558,7 @@ export default function PerfilPage({ posts, likedPostIds }) {
       bioDraft,
     ].some((value) => typeof value === 'string')
 
-    const hasComposerDraft = Boolean(
-      composerType ||
-      postDraft.trim() ||
-      storyDraft.title.trim() ||
-      storyDraft.description.trim(),
-    )
-
-    const shouldPersist = hasProfileFieldDraft || hasComposerDraft || activeTab !== 'Publicaciones'
+    const shouldPersist = hasProfileFieldDraft || activeTab !== 'Publicaciones'
 
     if (!shouldPersist) {
       clearStoredProfileDraft(user.id)
@@ -603,12 +572,6 @@ export default function PerfilPage({ posts, likedPostIds }) {
       phoneDraft,
       bioDraft,
       activeTab,
-      composerType,
-      postDraft,
-      storyDraft: {
-        title: typeof storyDraft.title === 'string' ? storyDraft.title : '',
-        description: typeof storyDraft.description === 'string' ? storyDraft.description : '',
-      },
       updatedAt: new Date().toISOString(),
     })
   }, [
@@ -619,9 +582,6 @@ export default function PerfilPage({ posts, likedPostIds }) {
     phoneDraft,
     bioDraft,
     activeTab,
-    composerType,
-    postDraft,
-    storyDraft,
   ])
 
   if (!user) {
@@ -670,7 +630,7 @@ export default function PerfilPage({ posts, likedPostIds }) {
 
   const onToggleAvatarMenu = () => {
     setSettingsOpen(false)
-    setComposerMenuOpen(false)
+    setCreator('')
     setAvatarMenuOpen((current) => !current)
   }
 
@@ -775,198 +735,8 @@ export default function PerfilPage({ posts, likedPostIds }) {
     event.target.value = ''
   }
 
-  const onStoryField = (field) => (event) => {
-    const value = event.target.value
-    setStoryDraft((current) => ({ ...current, [field]: value }))
-  }
-
-  const onStoryFile = (event) => {
-    const file = event.target.files?.[0] ?? null
-    setStoryFile(file)
-  }
-
-  const onPostFile = (event) => {
-    const file = event.target.files?.[0] ?? null
-    setPostFile(file)
-  }
-
-  const stopCameraStream = () => {
-    const stream = cameraStreamRef.current
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop())
-      cameraStreamRef.current = null
-    }
-
-    setIsCameraStreamReady(false)
-
-    if (cameraVideoRef.current) {
-      cameraVideoRef.current.srcObject = null
-    }
-  }
-
-  const clearCameraCapture = () => {
-    if (cameraCapturedUrl) {
-      URL.revokeObjectURL(cameraCapturedUrl)
-    }
-
-    setCameraCapturedUrl('')
-    setCameraCapturedFile(null)
-  }
-
-  const closeCameraModal = () => {
-    stopCameraStream()
-    clearCameraCapture()
-    setIsCameraStreamReady(false)
-    setCameraTarget('')
-    setCameraConsentAccepted(false)
-    setIsCameraPermissionBusy(false)
-    setCameraHint('')
-    setCameraError('')
-    setIsCameraModalOpen(false)
-  }
-
-  const onOpenCameraCapture = (targetType) => {
-    stopCameraStream()
-    clearCameraCapture()
-    setIsCameraStreamReady(false)
-    setCameraTarget(targetType === 'post' ? 'post' : 'story')
-    setCameraConsentAccepted(false)
-    setIsCameraPermissionBusy(false)
-    setCameraError('')
-    setCameraHint('Acepta las condiciones y luego permite la camara para continuar.')
-    setIsCameraModalOpen(true)
-  }
-
-  const onRequestCameraAccess = async () => {
-    if (!cameraConsentAccepted) {
-      setCameraError('Debes aceptar las condiciones para usar la camara.')
-      return
-    }
-
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      setCameraError('Tu navegador no permite usar camara en este dispositivo.')
-      return
-    }
-
-    setIsCameraPermissionBusy(true)
-    setCameraError('')
-    setCameraHint('Google Chrome te pedira permiso para usar la camara del dispositivo.')
-
-    try {
-      stopCameraStream()
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
-        audio: false,
-      })
-
-      cameraStreamRef.current = stream
-
-      if (cameraVideoRef.current) {
-        cameraVideoRef.current.srcObject = stream
-        try {
-          await cameraVideoRef.current.play()
-        } catch {
-          // Algunos navegadores bloquean play hasta que haya gesto explicito del usuario.
-        }
-      }
-
-      setIsCameraStreamReady(true)
-      setCameraHint('Permiso concedido. Enfoca y pulsa "Capturar foto".')
-    } catch (error) {
-      const messageByCode = {
-        NotAllowedError: 'Permiso denegado. Debes permitir la camara para tomar la foto.',
-        NotFoundError: 'No se detecto una camara disponible en este dispositivo.',
-        NotReadableError: 'La camara esta siendo usada por otra aplicacion.',
-      }
-
-      const errorName = error && typeof error === 'object' ? error.name : ''
-      setIsCameraStreamReady(false)
-      setCameraError(messageByCode[errorName] || 'No se pudo abrir la camara del dispositivo.')
-      setCameraHint('')
-    } finally {
-      setIsCameraPermissionBusy(false)
-    }
-  }
-
-  const onCaptureCameraPhoto = () => {
-    const videoElement = cameraVideoRef.current
-    if (!videoElement) {
-      setCameraError('La camara no esta lista todavia. Intenta nuevamente.')
-      return
-    }
-
-    const width = Number(videoElement.videoWidth)
-    const height = Number(videoElement.videoHeight)
-
-    if (!width || !height) {
-      setCameraError('Aun no hay vista previa de camara. Espera un momento e intenta otra vez.')
-      return
-    }
-
-    const canvas = document.createElement('canvas')
-    canvas.width = width
-    canvas.height = height
-
-    const context = canvas.getContext('2d')
-    if (!context) {
-      setCameraError('No se pudo preparar la captura de foto en este dispositivo.')
-      return
-    }
-
-    context.drawImage(videoElement, 0, 0, width, height)
-
-    canvas.toBlob((blob) => {
-      if (!blob) {
-        setCameraError('No se pudo generar la foto. Intenta de nuevo.')
-        return
-      }
-
-      if (cameraCapturedUrl) {
-        URL.revokeObjectURL(cameraCapturedUrl)
-      }
-
-      const file = new File([blob], `captura-${Date.now()}.jpg`, { type: 'image/jpeg' })
-      const previewUrl = URL.createObjectURL(blob)
-
-      setCameraCapturedFile(file)
-      setCameraCapturedUrl(previewUrl)
-      setCameraError('')
-      setCameraHint('Foto tomada. Ahora puedes Guardar foto y subir o Volver a intentarlo.')
-    }, 'image/jpeg', 0.92)
-  }
-
-  const onRetryCameraPhoto = () => {
-    clearCameraCapture()
-    setCameraError('')
-    setCameraHint('Toma una nueva foto desde la camara.')
-  }
-
-  const onSaveCameraPhoto = () => {
-    if (!cameraCapturedFile) {
-      setCameraError('Primero debes tomar una foto antes de guardarla.')
-      return
-    }
-
-    if (cameraTarget === 'story') {
-      setStoryFile(cameraCapturedFile)
-    } else {
-      setPostFile(cameraCapturedFile)
-    }
-
-    setComposerError('')
-    setComposerStatus('Foto guardada y lista para subir.')
-    closeCameraModal()
-  }
-
-  const onToggleComposerMenu = () => {
-    setSettingsOpen(false)
-    setAvatarMenuOpen(false)
-    setComposerMenuOpen((current) => !current)
-  }
-
   const onToggleSettingsPanel = () => {
-    setComposerMenuOpen(false)
+    setCreator('')
     setAvatarMenuOpen(false)
     setSettingsOpen((current) => !current)
   }
@@ -988,85 +758,6 @@ export default function PerfilPage({ posts, likedPostIds }) {
     const didLogout = await logout()
     if (didLogout) {
       navigate('/acceso', { replace: true, state: { switchAccount: true } })
-    }
-  }
-
-  const onSelectComposerType = (nextType) => {
-    setComposerType(nextType)
-    setComposerMenuOpen(false)
-    setComposerStatus('')
-    setComposerError('')
-  }
-
-  const onStorySubmit = async (event) => {
-    event.preventDefault()
-
-    const title = storyDraft.title.trim()
-    if (!title) {
-      setComposerError('Agrega titulo para la historia.')
-      return
-    }
-
-    setIsStorySubmitting(true)
-    setComposerStatus('')
-    setComposerError('')
-
-    try {
-      const response = await createStory({
-        title,
-        description: storyDraft.description.trim(),
-        mediaFile: storyFile,
-      })
-
-      if (!response?.story) {
-        setComposerError('No se pudo crear la historia.')
-        return
-      }
-
-      setStories((current) => [response.story, ...current])
-      setStoryDraft({ title: '', description: '' })
-      setStoryFile(null)
-      setComposerStatus('Historia publicada correctamente.')
-    } catch (error) {
-      setComposerError(error instanceof Error ? error.message : 'No se pudo crear la historia.')
-    } finally {
-      setIsStorySubmitting(false)
-    }
-  }
-
-  const onPostSubmit = async (event) => {
-    event.preventDefault()
-
-    const caption = postDraft.trim()
-    if (!caption && !postFile) {
-      setComposerError('Escribe un texto o adjunta una imagen, video o audio para publicar.')
-      return
-    }
-
-    setIsPostSubmitting(true)
-    setComposerStatus('')
-    setComposerError('')
-
-    try {
-      const created = await createPost({
-        caption,
-        mediaFile: postFile,
-        alsoStory: false,
-      })
-
-      if (!created?.id) {
-        setComposerError('No se pudo crear la publicacion.')
-        return
-      }
-
-      setLocalPosts((current) => [created, ...current.filter((item) => item.id !== created.id)])
-      setPostDraft('')
-      setPostFile(null)
-      setComposerStatus('Publicacion creada correctamente.')
-    } catch (error) {
-      setComposerError(error instanceof Error ? error.message : 'No se pudo crear la publicacion.')
-    } finally {
-      setIsPostSubmitting(false)
     }
   }
 
@@ -1616,179 +1307,7 @@ export default function PerfilPage({ posts, likedPostIds }) {
         {!settingsOpen && coverStatus ? <p className="route-message news-note">{coverStatus}</p> : null}
       </header>
 
-      <section className="panel profile-create-panel" aria-label="Crear contenido">
-        <div className="profile-create-head">
-          <h2>Crear contenido</h2>
-
-          <div className="profile-plus-wrap">
-            <button
-              aria-expanded={composerMenuOpen ? 'true' : 'false'}
-              aria-label="Abrir opciones de creacion"
-              className="profile-plus-trigger"
-              onClick={onToggleComposerMenu}
-              type="button"
-            >
-              +
-            </button>
-
-            {composerMenuOpen ? (
-              <div className="profile-plus-submenu" role="menu">
-                <button onClick={() => onSelectComposerType('story')} role="menuitem" type="button">
-                  Historia
-                </button>
-                <button onClick={() => onSelectComposerType('post')} role="menuitem" type="button">
-                  Publicacion
-                </button>
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        {composerStatus ? <p className="route-message news-note">{composerStatus}</p> : null}
-        {composerError ? <p className="route-message error">{composerError}</p> : null}
-
-        {composerType === 'story' ? (
-          <form className="profile-story-form" onSubmit={onStorySubmit}>
-            <label>
-              Titulo
-              <input
-                onChange={onStoryField('title')}
-                placeholder="Ej: Reporte desde mi comunidad"
-                value={storyDraft.title}
-              />
-            </label>
-
-            <label>
-              Descripcion
-              <textarea
-                onChange={onStoryField('description')}
-                placeholder="Cuenta brevemente el contexto"
-                value={storyDraft.description}
-              />
-            </label>
-
-            <label className="profile-story-file">
-              Adjuntar desde galeria (imagen, video o audio)
-              <input accept="image/*,video/*,audio/*" onChange={onStoryFile} type="file" />
-            </label>
-
-            <button className="profile-story-camera-btn" onClick={() => onOpenCameraCapture('story')} type="button">
-              Tomar foto desde el dispositivo
-            </button>
-
-            {storyFile ? <p className="profile-story-file-name">Archivo: {storyFile.name}</p> : null}
-
-            <button className="profile-follow" disabled={isStorySubmitting} type="submit">
-              {isStorySubmitting ? 'Publicando historia...' : 'Publicar historia'}
-            </button>
-          </form>
-        ) : null}
-
-        {composerType === 'post' ? (
-          <form className="profile-story-form" onSubmit={onPostSubmit}>
-            <label>
-              Texto de publicacion
-              <textarea
-                onChange={(event) => setPostDraft(event.target.value)}
-                placeholder="Comparte tu reporte o contexto"
-                value={postDraft}
-              />
-            </label>
-
-            <label className="profile-story-file">
-              Adjuntar desde galeria (imagen, video o audio)
-              <input accept="image/*,video/*,audio/*" onChange={onPostFile} type="file" />
-            </label>
-
-            <button className="profile-story-camera-btn" onClick={() => onOpenCameraCapture('post')} type="button">
-              Tomar foto desde el dispositivo
-            </button>
-
-            {postFile ? <p className="profile-story-file-name">Archivo: {postFile.name}</p> : null}
-
-            <button className="profile-follow" disabled={isPostSubmitting} type="submit">
-              {isPostSubmitting ? 'Publicando...' : 'Publicar publicacion'}
-            </button>
-          </form>
-        ) : null}
-      </section>
-
-      {isCameraModalOpen ? (
-        <section
-          className="camera-capture-backdrop"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) {
-              closeCameraModal()
-            }
-          }}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Tomar foto desde el dispositivo"
-        >
-          <article className="camera-capture-modal panel">
-            <header className="camera-capture-head">
-              <h2>Tomar foto para {cameraTarget === 'post' ? 'publicacion' : 'historia'}</h2>
-              <button className="camera-capture-close" onClick={closeCameraModal} type="button">
-                Cerrar
-              </button>
-            </header>
-
-            <p className="camera-capture-note">
-              Para continuar, debes aceptar las condiciones. Luego Google Chrome pedira tu permiso para usar la camara.
-            </p>
-
-            <label className="camera-capture-consent">
-              <input
-                checked={cameraConsentAccepted}
-                onChange={(event) => setCameraConsentAccepted(event.target.checked)}
-                type="checkbox"
-              />
-              Acepto usar mi camara para capturar contenido y subirlo en VensuR.
-            </label>
-
-            <div className="camera-capture-controls">
-              <button
-                className="profile-follow"
-                disabled={!cameraConsentAccepted || isCameraPermissionBusy}
-                onClick={onRequestCameraAccess}
-                type="button"
-              >
-                {isCameraPermissionBusy ? 'Solicitando permiso...' : 'Aceptar condiciones y abrir camara'}
-              </button>
-              <button
-                className="profile-follow subtle"
-                disabled={!isCameraStreamReady}
-                onClick={onCaptureCameraPhoto}
-                type="button"
-              >
-                Capturar foto
-              </button>
-            </div>
-
-            <div className="camera-capture-preview" aria-label="Vista previa de camara">
-              {cameraCapturedUrl ? (
-                <img alt="Foto capturada" className="camera-capture-image" src={cameraCapturedUrl} />
-              ) : (
-                <video autoPlay className="camera-capture-video" muted playsInline ref={cameraVideoRef} />
-              )}
-            </div>
-
-            {cameraHint ? <p className="route-message news-note">{cameraHint}</p> : null}
-            {cameraError ? <p className="route-message error">{cameraError}</p> : null}
-
-            {cameraCapturedFile ? (
-              <div className="camera-capture-actions">
-                <button className="profile-follow" onClick={onSaveCameraPhoto} type="button">
-                  Guardar foto y subir
-                </button>
-                <button className="profile-follow subtle" onClick={onRetryCameraPhoto} type="button">
-                  Volver a intentarlo
-                </button>
-              </div>
-            ) : null}
-          </article>
-        </section>
-      ) : null}
+      {composerStatus ? <p className="route-message news-note">{composerStatus}</p> : null}
 
       <nav className="profile-tabs" aria-label="Secciones del perfil">
         {profileTabs.map((tab) => (
@@ -1801,9 +1320,71 @@ export default function PerfilPage({ posts, likedPostIds }) {
             {tab}
           </button>
         ))}
+
+        <div className="profile-create-menu">
+          <button
+            aria-expanded={creator === 'menu'}
+            aria-label="Crear contenido"
+            className="profile-create-plus"
+            onClick={() => setCreator((current) => (current === 'menu' ? '' : 'menu'))}
+            type="button"
+          >
+            +
+          </button>
+
+          {creator === 'menu' ? (
+            <div className="profile-create-pop" role="menu">
+              <button onClick={() => setCreator('post')} role="menuitem" type="button">
+                Publicación
+              </button>
+              <button onClick={() => setCreator('story')} role="menuitem" type="button">
+                Historia
+              </button>
+            </div>
+          ) : null}
+        </div>
       </nav>
 
       {renderActiveTab()}
+
+      {creator === 'story' || creator === 'post' ? (
+        <Suspense fallback={<div className="profile-create-loading">Abriendo el editor…</div>}>
+          {creator === 'story' ? (
+            <StoryStudio
+              user={user}
+              mode="story"
+              onClose={() => setCreator('')}
+              onPublish={async ({ mediaFile, title, description, metadata }) => {
+                try {
+                  const response = await createStory({
+                    title: title || 'Historia',
+                    description: description || '',
+                    mediaFile,
+                    metadata,
+                  })
+                  if (!response?.story) return false
+                  setStories((current) => [response.story, ...current])
+                  setComposerStatus('Historia publicada correctamente.')
+                  return true
+                } catch {
+                  return false
+                }
+              }}
+            />
+          ) : (
+            <PostComposer
+              user={user}
+              onClose={() => setCreator('')}
+              onCreated={(created) => {
+                if (created?.id) {
+                  setLocalPosts((current) => [created, ...current.filter((item) => item.id !== created.id)])
+                }
+                setComposerStatus('Publicación creada correctamente.')
+              }}
+            />
+          )}
+        </Suspense>
+      ) : null}
     </section>
   )
 }
