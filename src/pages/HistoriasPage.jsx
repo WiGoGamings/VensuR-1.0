@@ -1,12 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { markStoryViewed } from '../services/storiesApi'
+import { getStoriesFeed, markStoryViewed } from '../services/storiesApi'
 import './Pages.css'
 
 // Un video se repite hasta 3 veces; si el usuario no se mueve, pasa solo al siguiente.
 const VIDEO_MAX_LOOPS = 3
-// Las historias de solo imagen/texto avanzan solas tras unos segundos (sin barra visible).
+// Las historias de solo imagen avanzan solas tras unos segundos (sin barra visible).
 const IMAGE_DURATION_MS = 7000
+// Feed infinito: se recicla el contenido y se recorta por arriba para no crecer sin límite.
+const MAX_FEED = 90
+const BATCH_SIZE = 12
+const PRELOAD_WHEN_LEFT = 4
+const TRIM_KEEP_ABOVE = 14
 
 const STORY_FILTER_CSS_BY_NAME = {
   none: 'none',
@@ -35,16 +40,16 @@ const REEL_GRADIENTS = [
   'radial-gradient(circle at 70% 70%, #6a2f52, transparent 45%), linear-gradient(160deg, #10131f, #200f18)',
 ]
 
-function isVideoStory(story) {
-  if (typeof story?.mediaType === 'string' && story.mediaType.startsWith('video/')) return true
-  const mediaUrl = typeof story?.mediaUrl === 'string' ? story.mediaUrl.toLowerCase() : ''
-  return /\.(mp4|webm|mov|m4v)(\?|$)/.test(mediaUrl)
+function isVideoUrl(url, type) {
+  if (typeof type === 'string' && type.startsWith('video/')) return true
+  const value = typeof url === 'string' ? url.toLowerCase() : ''
+  return /\.(mp4|webm|mov|m4v)(\?|$)/.test(value)
 }
 
-function isAudioStory(story) {
-  if (typeof story?.mediaType === 'string' && story.mediaType.startsWith('audio/')) return true
-  const mediaUrl = typeof story?.mediaUrl === 'string' ? story.mediaUrl.toLowerCase() : ''
-  return /\.(mp3|wav|ogg|m4a|aac|flac)(\?|$)/.test(mediaUrl)
+function isAudioUrl(url, type) {
+  if (typeof type === 'string' && type.startsWith('audio/')) return true
+  const value = typeof url === 'string' ? url.toLowerCase() : ''
+  return /\.(mp3|wav|ogg|m4a|aac|flac)(\?|$)/.test(value)
 }
 
 function clampNumber(value, min, max, fallback) {
@@ -70,49 +75,98 @@ function resolveStoryFilter(filterName) {
   return STORY_FILTER_CSS_BY_NAME[filterName] || STORY_FILTER_CSS_BY_NAME.none
 }
 
-function readStoryMusic(story) {
-  const music = story && typeof story.music === 'object' ? story.music : null
-  if (!music) return null
+function readStoryMusic(music) {
+  if (!music || typeof music !== 'object') return null
   const previewUrl = typeof music.previewUrl === 'string' ? music.previewUrl : ''
   const title = typeof music.title === 'string' ? music.title.trim() : ''
-  const artist = typeof music.artist === 'string' ? music.artist.trim() : ''
   if (!previewUrl || !title) return null
   return {
-    ...music,
     previewUrl,
     title,
-    artist,
+    artist: typeof music.artist === 'string' ? music.artist.trim() : '',
     startSeconds: clampNumber(music.startSeconds, 0, 180, 0),
     volume: clampNumber(music.volume, 0.05, 1, 0.8),
   }
 }
 
+/** Convierte una historia del feed de layout (id "user-x"/"news-x") en un item de reel. */
+function propStoryToReel(story) {
+  const mediaUrl = typeof story?.mediaUrl === 'string' ? story.mediaUrl : ''
+  if (!mediaUrl) return null
+  const rawId = String(story?.id || '')
+  return {
+    poolId: rawId || mediaUrl,
+    realId: rawId.startsWith('user-') ? rawId.slice(5) : '',
+    label: typeof story?.label === 'string' && story.label.trim() ? story.label.trim() : 'Historia',
+    mediaUrl,
+    mediaType: typeof story?.mediaType === 'string' ? story.mediaType : '',
+    reactions: Number(story?.reactions ?? 0),
+    source: story?.source || 'Comunidad',
+    editor: story?.editor,
+    music: story?.music,
+    externalUrl: typeof story?.externalUrl === 'string' ? story.externalUrl : '',
+  }
+}
+
+/** Convierte una historia de /api/content/stories en un item de reel. */
+function apiStoryToReel(story) {
+  const mediaUrl = typeof story?.mediaUrl === 'string' ? story.mediaUrl : ''
+  if (!mediaUrl) return null
+  const realId = String(story?.id || '')
+  return {
+    poolId: `user-${realId}`,
+    realId,
+    label: (story?.author || story?.title || 'Comunidad').toString().trim().slice(0, 42) || 'Historia',
+    mediaUrl,
+    mediaType: typeof story?.mediaType === 'string' ? story.mediaType : '',
+    reactions: Number(story?.reactions ?? 0),
+    source: 'Comunidad',
+    editor: story?.editor,
+    music: story?.music,
+    externalUrl: '',
+  }
+}
+
+function shuffled(list) {
+  if (list.length < 2) return list.slice()
+  const copy = list.slice()
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[copy[i], copy[j]] = [copy[j], copy[i]]
+  }
+  return copy
+}
+
 /**
  * Una historia a pantalla completa dentro del feed vertical.
  * @param {{
- *  story: any, index: number, active: boolean, loadMedia: boolean, muted: boolean,
- *  onAdvance: (index: number) => void, onToggleMute: () => void
+ *  reel: any, index: number, active: boolean, loadMedia: boolean, muted: boolean,
+ *  onAdvance: (key: string) => void, onToggleMute: () => void
  * }} props
  */
-function StoryReel({ story, index, active, loadMedia, muted, onAdvance, onToggleMute }) {
+function StoryReel({ reel, index, active, loadMedia, muted, onAdvance, onToggleMute }) {
   const mediaRef = useRef(null)
   const musicRef = useRef(null)
   const loopsRef = useRef(0)
   const [held, setHeld] = useState(false)
 
-  const editor = useMemo(() => normalizeStoryEditor(story?.editor), [story?.editor])
-  const music = useMemo(() => readStoryMusic(story), [story])
+  const reelKey = reel.key
+  const mediaUrl = reel.mediaUrl
+  const mediaType = reel.mediaType
+  const rawEditor = reel.editor
+  const rawMusic = reel.music
 
-  const isVideo = isVideoStory(story)
-  const isAudio = isAudioStory(story)
-  const hasMedia = Boolean(story?.mediaUrl)
-  const isImage = hasMedia && !isVideo && !isAudio
+  const editor = useMemo(() => normalizeStoryEditor(rawEditor), [rawEditor])
+  const music = useMemo(() => readStoryMusic(rawMusic), [rawMusic])
+
+  const isVideo = isVideoUrl(mediaUrl, mediaType)
+  const isAudio = isAudioUrl(mediaUrl, mediaType)
+  const isImage = Boolean(mediaUrl) && !isVideo && !isAudio
   const mediaFilter = resolveStoryFilter(editor.filter)
   const musicLabel = music ? `${music.title}${music.artist ? ` · ${music.artist}` : ''}` : ''
   const hasAudioTrack = isVideo || isAudio || Boolean(music?.previewUrl)
-  const reactions = Number.isFinite(Number(story?.reactions)) ? Number(story.reactions) : 0
+  const reactions = Number.isFinite(Number(reel.reactions)) ? Number(reel.reactions) : 0
 
-  // Reproduce / pausa según sea la historia activa.
   useEffect(() => {
     const media = mediaRef.current
     const musicEl = musicRef.current
@@ -144,14 +198,13 @@ function StoryReel({ story, index, active, loadMedia, muted, onAdvance, onToggle
 
     let imageTimer
     if (!isVideo && !isAudio) {
-      imageTimer = window.setTimeout(() => onAdvance(index), IMAGE_DURATION_MS)
+      imageTimer = window.setTimeout(() => onAdvance(reelKey), IMAGE_DURATION_MS)
     }
     return () => {
       if (imageTimer) window.clearTimeout(imageTimer)
     }
-  }, [active, held, isVideo, isAudio, index, music?.startSeconds, music?.volume, onAdvance])
+  }, [active, held, isVideo, isAudio, reelKey, music?.startSeconds, music?.volume, onAdvance])
 
-  // Silencio (sin reiniciar el video).
   useEffect(() => {
     if (mediaRef.current) mediaRef.current.muted = muted
     if (musicRef.current) musicRef.current.muted = muted
@@ -160,7 +213,7 @@ function StoryReel({ story, index, active, loadMedia, muted, onAdvance, onToggle
   const handleEnded = () => {
     loopsRef.current += 1
     if (loopsRef.current >= VIDEO_MAX_LOOPS) {
-      onAdvance(index)
+      onAdvance(reelKey)
       return
     }
     const media = mediaRef.current
@@ -189,11 +242,11 @@ function StoryReel({ story, index, active, loadMedia, muted, onAdvance, onToggle
   const gradient = REEL_GRADIENTS[index % REEL_GRADIENTS.length]
 
   return (
-    <article className="reel" data-index={index}>
+    <article className="reel">
       <div
         className="reel-media"
-        onClick={hasMedia && !isImage ? toggleHold : undefined}
-        role={hasMedia && !isImage ? 'button' : undefined}
+        onClick={mediaUrl && !isImage ? toggleHold : undefined}
+        role={mediaUrl && !isImage ? 'button' : undefined}
         style={{ background: gradient }}
       >
         {!loadMedia ? null : isVideo ? (
@@ -204,32 +257,32 @@ function StoryReel({ story, index, active, loadMedia, muted, onAdvance, onToggle
             playsInline
             preload={active ? 'auto' : 'metadata'}
             ref={mediaRef}
-            src={story.mediaUrl}
+            src={mediaUrl}
             style={{ filter: mediaFilter }}
           />
         ) : isImage ? (
           <img
-            alt={story.label}
+            alt={reel.label}
             className="reel-fill"
             loading={active ? 'eager' : 'lazy'}
-            src={story.mediaUrl}
+            src={mediaUrl}
             style={{ filter: mediaFilter }}
           />
         ) : isAudio ? (
           <div className="reel-audio">
-            <span>{story.label}</span>
+            <span>{reel.label}</span>
             <small>Historia con audio</small>
-            <audio muted={muted} onEnded={handleEnded} preload="metadata" ref={mediaRef} src={story.mediaUrl} />
+            <audio muted={muted} onEnded={handleEnded} preload="metadata" ref={mediaRef} src={mediaUrl} />
           </div>
         ) : (
-          <p className="reel-textcard">{editor.overlayText || story.label}</p>
+          <p className="reel-textcard">{editor.overlayText || reel.label}</p>
         )}
 
         {loadMedia && music?.previewUrl && !isAudio ? (
           <audio loop muted={muted} preload="metadata" ref={musicRef} src={music.previewUrl} />
         ) : null}
 
-        {editor.overlayText && (hasMedia || isVideo || isAudio) ? (
+        {editor.overlayText && mediaUrl ? (
           <div
             className={`reel-overlay align-${editor.textAlign}`}
             style={{ color: editor.textColor, fontSize: `${editor.textSize}px`, top: `${editor.textPositionY}%` }}
@@ -264,12 +317,12 @@ function StoryReel({ story, index, active, loadMedia, muted, onAdvance, onToggle
       ) : null}
 
       <footer className="reel-caption">
-        <strong>{story.label}</strong>
+        <strong>{reel.label}</strong>
         <p>
-          {story.source || 'Comunidad'} · {reactions} {reactions === 1 ? 'reacción' : 'reacciones'}
+          {reel.source || 'Comunidad'} · {reactions} {reactions === 1 ? 'reacción' : 'reacciones'}
         </p>
-        {story.externalUrl ? (
-          <a href={story.externalUrl} rel="noreferrer" target="_blank">
+        {reel.externalUrl ? (
+          <a href={reel.externalUrl} rel="noreferrer" target="_blank">
             Ver fuente
           </a>
         ) : null}
@@ -284,43 +337,135 @@ function StoryReel({ story, index, active, loadMedia, muted, onAdvance, onToggle
 export default function HistoriasPage({ stories }) {
   const navigate = useNavigate()
   const { storyId } = useParams()
-  const containerRef = useRef(null)
-  const activeIndexRef = useRef(0)
-  const scrollRafRef = useRef(0)
-  const didInitRef = useRef(false)
 
-  const [activeIndex, setActiveIndex] = useState(0)
+  const containerRef = useRef(null)
+  const scrollRafRef = useRef(0)
+  const loadingRef = useRef(false)
+  const lastLoadAtRef = useRef(0)
+  const keySeqRef = useRef(0)
+  const feedRef = useRef([])
+  const activeKeyRef = useRef('')
+  const seededRef = useRef(false)
+  const didInitScrollRef = useRef(false)
+  const pendingScrollAdjustRef = useRef(0)
+
+  const [feed, setFeed] = useState([])
+  const [apiPool, setApiPool] = useState([])
+  const [activeKey, setActiveKey] = useState('')
   const [muted, setMuted] = useState(true)
   const [showSoundHint, setShowSoundHint] = useState(true)
+  const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [wantedId] = useState(() => (storyId ? String(storyId) : ''))
 
-  const items = useMemo(() => {
-    if (!Array.isArray(stories)) return []
-    return stories.filter(Boolean).map((story, index) => ({
-      ...story,
-      id: story?.id ? String(story.id) : `story-${index}`,
-      label: typeof story?.label === 'string' && story.label.trim() ? story.label.trim() : 'Historia',
-    }))
-  }, [stories])
-
-  const scrollToIndex = useCallback(
-    (index, smooth = true) => {
-      const container = containerRef.current
-      if (!container || items.length === 0) return
-      const clamped = Math.max(0, Math.min(index, items.length - 1))
-      container.scrollTo({ top: clamped * container.clientHeight, behavior: smooth ? 'smooth' : 'auto' })
-    },
-    [items.length],
+  const propPool = useMemo(
+    () => (Array.isArray(stories) ? stories.map(propStoryToReel).filter(Boolean) : []),
+    [stories],
   )
 
-  // Avance automático (fin de video x3 o temporizador de imagen).
-  const advanceFrom = useCallback(
-    (index) => {
-      if (index !== activeIndexRef.current) return
-      if (index >= items.length - 1) return
+  const pool = useMemo(() => {
+    const byId = new Map()
+    for (const reel of [...propPool, ...apiPool]) byId.set(reel.poolId, reel)
+    return Array.from(byId.values())
+  }, [propPool, apiPool])
+
+  const makeBatch = useCallback((source, count) => {
+    if (source.length === 0) return []
+    const order = shuffled(source)
+    const out = []
+    for (let i = 0; i < count; i += 1) {
+      const base = order[i % order.length]
+      keySeqRef.current += 1
+      out.push({ ...base, key: `r${keySeqRef.current}` })
+    }
+    return out
+  }, [])
+
+  useEffect(() => {
+    feedRef.current = feed
+  }, [feed])
+  useEffect(() => {
+    activeKeyRef.current = activeKey
+  }, [activeKey])
+
+  const activeIndex = useMemo(() => {
+    const i = feed.findIndex((reel) => reel.key === activeKey)
+    return i >= 0 ? i : 0
+  }, [feed, activeKey])
+
+  const scrollToIndex = useCallback((index, smooth = true) => {
+    const container = containerRef.current
+    if (!container) return
+    const list = feedRef.current
+    const clamped = Math.max(0, Math.min(index, list.length - 1))
+    container.scrollTo({ top: clamped * container.clientHeight, behavior: smooth ? 'smooth' : 'auto' })
+  }, [])
+
+  const loadMore = useCallback(async () => {
+    if (loadingRef.current) return
+    if (Date.now() - lastLoadAtRef.current < 700) return
+    const source = pool
+    if (source.length === 0 && feedRef.current.length === 0) return
+
+    loadingRef.current = true
+    setIsLoadingMore(true)
+    try {
+      // Trae un lote más amplio de historias la primera vez (el prop trae solo ~16).
+      if (apiPool.length === 0) {
+        try {
+          const payload = await getStoriesFeed()
+          const mapped = Array.isArray(payload?.items)
+            ? payload.items.map(apiStoryToReel).filter(Boolean)
+            : []
+          if (mapped.length) setApiPool(mapped)
+        } catch {
+          // seguimos con lo que haya
+        }
+      }
+
+      // Que el círculo de carga se alcance a ver.
+      await new Promise((resolve) => setTimeout(resolve, 420))
+
+      setFeed((current) => {
+        const basis = source.length
+          ? source
+          : current.map((reel) => {
+              const copy = { ...reel }
+              delete copy.key
+              return copy
+            })
+        const batch = makeBatch(basis, BATCH_SIZE)
+        if (batch.length === 0) return current
+
+        let next = [...current, ...batch]
+        const activeI = current.findIndex((reel) => reel.key === activeKeyRef.current)
+        const overflow = next.length - MAX_FEED
+        if (overflow > 0 && activeI - overflow >= TRIM_KEEP_ABOVE) {
+          next = next.slice(overflow)
+          pendingScrollAdjustRef.current += overflow
+        }
+        return next
+      })
+    } finally {
+      lastLoadAtRef.current = Date.now()
+      loadingRef.current = false
+      setIsLoadingMore(false)
+    }
+  }, [apiPool.length, makeBatch, pool])
+
+  const advanceFromKey = useCallback(
+    (key) => {
+      const list = feedRef.current
+      const index = list.findIndex((reel) => reel.key === key)
+      if (index < 0) return
+      const activeI = list.findIndex((reel) => reel.key === activeKeyRef.current)
+      if (index !== activeI) return
+      if (index >= list.length - 1) {
+        void loadMore()
+        return
+      }
       scrollToIndex(index + 1)
     },
-    [items.length, scrollToIndex],
+    [loadMore, scrollToIndex],
   )
 
   const toggleMute = useCallback(() => {
@@ -334,50 +479,80 @@ export default function HistoriasPage({ stories }) {
       scrollRafRef.current = 0
       const container = containerRef.current
       if (!container) return
-      const index = Math.round(container.scrollTop / Math.max(1, container.clientHeight))
-      if (index !== activeIndexRef.current && index >= 0 && index < items.length) {
-        activeIndexRef.current = index
-        setActiveIndex(index)
+      const list = feedRef.current
+      const height = Math.max(1, container.clientHeight)
+      const index = Math.round(container.scrollTop / height)
+
+      if (list[index] && list[index].key !== activeKeyRef.current) {
+        setActiveKey(list[index].key)
       }
+
+      const nearBottom =
+        index >= list.length - PRELOAD_WHEN_LEFT ||
+        container.scrollTop + container.clientHeight >= container.scrollHeight - height * 0.6
+      if (nearBottom) void loadMore()
     })
-  }, [items.length])
+  }, [loadMore])
 
-  // Posiciona en la historia pedida por la URL (una sola vez, al cargar).
-  // No tocamos el estado aquí: al hacer scroll, handleScroll fija la activa.
+  // Semilla del feed cuando el pool está listo (patrón async para no llamar setState en el cuerpo del efecto).
   useEffect(() => {
-    if (didInitRef.current || items.length === 0) return
-    didInitRef.current = true
-    if (!wantedId) return
-    const index = items.findIndex((story) => story.id === wantedId)
-    if (index > 0) scrollToIndex(index, false)
-  }, [items, wantedId, scrollToIndex])
-
-  // Sincroniza la URL + marca vista cuando cambia la historia activa.
-  useEffect(() => {
-    const story = items[activeIndex]
-    if (!story) return
-    if (story.id && !story.id.startsWith('story-')) {
-      void markStoryViewed(story.id)
-      if (story.id !== storyId) {
-        navigate(`/historias/${encodeURIComponent(story.id)}`, { replace: true })
-      }
+    if (seededRef.current || pool.length === 0) return undefined
+    let alive = true
+    const seed = async () => {
+      if (!alive || seededRef.current) return
+      seededRef.current = true
+      const first = makeBatch(pool, Math.min(pool.length, BATCH_SIZE * 2))
+      setFeed(first)
+      setActiveKey(first[0]?.key || '')
     }
-  }, [activeIndex, items, navigate, storyId])
+    void seed()
+    return () => {
+      alive = false
+    }
+  }, [pool, makeBatch])
 
-  // Flechas del teclado para navegar.
+  // Compensa el scroll cuando se recortan reels por arriba (feed infinito sin saltos).
+  useLayoutEffect(() => {
+    const n = pendingScrollAdjustRef.current
+    if (n > 0 && containerRef.current) {
+      const container = containerRef.current
+      container.scrollTop = Math.max(0, container.scrollTop - n * container.clientHeight)
+      pendingScrollAdjustRef.current = 0
+    }
+  }, [feed])
+
+  // Posiciona en la historia pedida por la URL (una vez).
+  useEffect(() => {
+    if (didInitScrollRef.current || feed.length === 0) return
+    didInitScrollRef.current = true
+    if (!wantedId) return
+    const index = feed.findIndex((reel) => reel.realId === wantedId)
+    if (index > 0) scrollToIndex(index, false)
+  }, [feed, wantedId, scrollToIndex])
+
+  // URL + marca de vista al cambiar de historia activa.
+  useEffect(() => {
+    const reel = feed.find((item) => item.key === activeKey)
+    if (!reel?.realId) return
+    void markStoryViewed(reel.realId)
+    if (reel.realId !== storyId) {
+      navigate(`/historias/${encodeURIComponent(reel.realId)}`, { replace: true })
+    }
+  }, [activeKey, feed, navigate, storyId])
+
   useEffect(() => {
     const onKey = (event) => {
       if (event.key === 'ArrowDown' || event.key === 'PageDown') {
         event.preventDefault()
-        scrollToIndex(activeIndexRef.current + 1)
+        scrollToIndex(activeIndex + 1)
       } else if (event.key === 'ArrowUp' || event.key === 'PageUp') {
         event.preventDefault()
-        scrollToIndex(activeIndexRef.current - 1)
+        scrollToIndex(activeIndex - 1)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [scrollToIndex])
+  }, [activeIndex, scrollToIndex])
 
   useEffect(() => {
     return () => {
@@ -385,7 +560,7 @@ export default function HistoriasPage({ stories }) {
     }
   }, [])
 
-  if (items.length === 0) {
+  if (pool.length === 0) {
     return (
       <section className="feed route-page reels-empty">
         <p className="route-message">No hay historias para mostrar todavía.</p>
@@ -395,6 +570,8 @@ export default function HistoriasPage({ stories }) {
       </section>
     )
   }
+
+  const showSpinner = isLoadingMore && activeIndex >= feed.length - 3
 
   return (
     <section className="reels-page">
@@ -410,19 +587,29 @@ export default function HistoriasPage({ stories }) {
         ) : null}
 
         <div className="reels-viewer" onScroll={handleScroll} ref={containerRef}>
-          {items.map((story, index) => (
+          {feed.map((reel, index) => (
             <StoryReel
               active={index === activeIndex}
               index={index}
-              key={story.id}
+              key={reel.key}
               loadMedia={Math.abs(index - activeIndex) <= 1}
               muted={muted}
-              onAdvance={advanceFrom}
+              onAdvance={advanceFromKey}
               onToggleMute={toggleMute}
-              story={story}
+              reel={reel}
             />
           ))}
+          <div className="reels-tail" aria-hidden={!showSpinner}>
+            <span className="reels-spinner" />
+          </div>
         </div>
+
+        {showSpinner ? (
+          <div className="reels-loading" role="status">
+            <span className="reels-spinner reels-spinner-lg" />
+            <span>Cargando más historias…</span>
+          </div>
+        ) : null}
       </div>
     </section>
   )
