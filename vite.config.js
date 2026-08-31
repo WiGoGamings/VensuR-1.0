@@ -1,3 +1,6 @@
+import { writeFileSync } from 'node:fs'
+import path from 'node:path'
+import process from 'node:process'
 import react, { reactCompilerPreset } from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
 import { defineConfig } from 'vite'
@@ -111,6 +114,38 @@ function rssProxyPlugin() {
   }
 }
 
+/**
+ * Genera dist/_redirects para Netlify a partir de API_PROXY_TARGET (la URL del
+ * backend en Render). Así el sitio reenvía /api/* y /uploads/* al backend sin
+ * tener que editar código: basta con poner esa variable en el panel de Netlify.
+ */
+function netlifyRedirectsPlugin() {
+  return {
+    name: 'vensur-netlify-redirects',
+    apply: 'build',
+    closeBundle() {
+      const rawTarget = (process.env.API_PROXY_TARGET || process.env.VITE_API_BASE_URL || '').trim()
+      const target = rawTarget.replace(/\/+$/, '')
+      const lines = []
+
+      if (target) {
+        lines.push(`/api/*  ${target}/api/:splat  200`)
+        lines.push(`/uploads/*  ${target}/uploads/:splat  200`)
+      }
+      // Fallback SPA (siempre al final).
+      lines.push('/*  /index.html  200')
+
+      const outDir = path.resolve(process.cwd(), 'dist')
+      writeFileSync(path.join(outDir, '_redirects'), `${lines.join('\n')}\n`)
+      console.log(
+        target
+          ? `[netlify] _redirects -> proxy de /api y /uploads a ${target}`
+          : '[netlify] _redirects -> solo fallback SPA (define API_PROXY_TARGET para el backend)',
+      )
+    },
+  }
+}
+
 function createApiProxyConfig() {
   return {
     '/api/auth': {
@@ -158,6 +193,7 @@ export default defineConfig({
   },
   plugins: [
     rssProxyPlugin(),
+    netlifyRedirectsPlugin(),
     react(),
     babel({ presets: [reactCompilerPreset()] })
   ],

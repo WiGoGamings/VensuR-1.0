@@ -1,7 +1,8 @@
 # =========================================================================
 #  VensuR - Frontend (Vite) en Netlify
-#  El backend vive en Render. Netlify reenvía /api/* y /uploads/* al backend
-#  para que el frontend use rutas relativas (sin CORS ni URLs absolutas).
+#  El backend vive en Render. NO edites este archivo: en el panel de Netlify
+#  define la variable  API_PROXY_TARGET = https://<tu-servicio>.onrender.com
+#  y el build genera dist/_redirects para reenviar /api/* y /uploads/* allí.
 # =========================================================================
 
 [build]
@@ -14,32 +15,7 @@
   # Timeout de las peticiones a la API (ms). Amplio para tolerar el "cold start"
   # del plan gratuito de Render (el primer request tras inactividad tarda ~40 s).
   VITE_API_TIMEOUT_MS = "45000"
-  # DEJAR VACÍO: el frontend llama a rutas relativas y Netlify las reenvía a Render.
-  VITE_API_BASE_URL = ""
 
-# ---- Reenvío al backend en Render -------------------------------------------
-# ⚠️  EDITA la URL: reemplaza TU-SERVICIO-EN-RENDER por el nombre real de tu
-#     Web Service de Render (queda como https://<algo>.onrender.com).
-
-[[redirects]]
-  from = "/api/*"
-  to = "https://TU-SERVICIO-EN-RENDER.onrender.com/api/:splat"
-  status = 200
-  force = true
-
-[[redirects]]
-  from = "/uploads/*"
-  to = "https://TU-SERVICIO-EN-RENDER.onrender.com/uploads/:splat"
-  status = 200
-  force = true
-
-# ---- SPA: cualquier otra ruta sirve index.html -----------------------------
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
-
-# ---- Cabeceras -------------------------------------------------------------
 [[headers]]
   for = "/assets/*"
   [headers.values]
