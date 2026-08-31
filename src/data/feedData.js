@@ -56,7 +56,6 @@
 export const topLinks = [
   { label: 'Inicio', path: '/' },
   { label: 'Historias', path: '/historias' },
-  { label: 'Acceso', path: '/acceso' },
   { label: 'Noticias', path: '/noticias' },
   { label: 'Explorar', path: '/explorar' },
   { label: 'Denuncias', path: '/denuncias', badge: '6' },
@@ -68,12 +67,10 @@ export const topLinks = [
 export const navItems = [
   { icon: '⌂', label: 'Inicio', count: '17', path: '/' },
   { icon: '◉', label: 'Historias', count: '08', path: '/historias' },
-  { icon: '☑', label: 'Acceso', count: '01', path: '/acceso' },
   { icon: '✦', label: 'Noticias', count: '11', path: '/noticias' },
   { icon: '◎', label: 'Explorar', count: '09', path: '/explorar' },
   { icon: '⚠', label: 'Denuncias', count: '12', path: '/denuncias' },
   { icon: '▶', label: 'En vivo', count: '05', path: '/vivo' },
-  { icon: '☺', label: 'Perfil', count: '03', path: '/perfil' },
 ]
 
 /** @type {ActivityLink[]} */
