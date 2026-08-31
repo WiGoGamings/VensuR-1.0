@@ -1,0 +1,54 @@
+# =========================================================================
+#  VensuR - Backend (Express + SQLite) en Render
+#  Render > New > Blueprint  ->  apunta a este repo y aplica este archivo.
+# =========================================================================
+services:
+  - type: web
+    name: vensur-api
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm run start:api
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+
+      # Secreto para firmar los JWT. Render genera uno fuerte automáticamente.
+      - key: AUTH_JWT_SECRET
+        generateValue: true
+
+      # La API corre detrás del proxy de Render.
+      - key: TRUST_PROXY
+        value: "1"
+
+      # Orígenes permitidos por CORS. PON AQUÍ la URL de tu sitio en Netlify
+      # (ej: https://vensur.netlify.app). Si usas el reenvío de netlify.toml
+      # igual conviene ponerla. Varias separadas por comas.
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+      # --- Despliegue de PRUEBA sin proveedor de correo ---
+      # Expone el código de verificación en la respuesta del registro para
+      # poder crear cuentas sin SMTP. ⚠️ NO dejar activo en producción real.
+      - key: AUTH_EXPOSE_VERIFICATION_CODE
+        value: "true"
+      - key: MAIL_TRANSPORT
+        value: console
+
+      # --- Contenido de demo (bots) ---
+      - key: BOTS_ENABLED
+        value: "true"
+      - key: BOTS_BOOTSTRAP_CONTENT
+        value: "true"
+      - key: BOT_USER_COUNT
+        value: "80"
+
+      # OAuth (opcional). Si no usas Google/Apple, déjalos sin valor.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: APPLE_CLIENT_ID
+        sync: false

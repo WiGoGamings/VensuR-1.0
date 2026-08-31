@@ -67,7 +67,8 @@ if (IS_PRODUCTION && (!process.env.AUTH_JWT_SECRET || AUTH_JWT_SECRET.length < 2
 }
 
 const AUTH_JWT_EXPIRES_IN = process.env.AUTH_JWT_EXPIRES_IN ?? '7d'
-const API_PORT = Number.parseInt(process.env.API_PORT ?? '8787', 10) || 8787
+// Render/Heroku/etc. inyectan PORT; en local usamos API_PORT o 8787.
+const API_PORT = Number.parseInt(process.env.PORT ?? process.env.API_PORT ?? '8787', 10) || 8787
 const TRUST_PROXY = safeString(process.env.TRUST_PROXY)
 const ALLOWED_ORIGINS = safeString(process.env.ALLOWED_ORIGINS)
   .split(',')
@@ -89,7 +90,13 @@ const EMAIL_VERIFICATION_CODE_TTL_MINUTES = Number.parseInt(
   process.env.EMAIL_VERIFICATION_CODE_TTL_MINUTES ?? '15',
   10,
 ) || 15
-const EXPOSE_DEV_VERIFICATION_CODE = process.env.NODE_ENV !== 'production'
+// En local se expone el código para probar sin SMTP. En producción se puede
+// forzar con AUTH_EXPOSE_VERIFICATION_CODE=true (útil para un despliegue de prueba
+// sin proveedor de correo). ¡No dejar activo en producción real!
+const EXPOSE_DEV_VERIFICATION_CODE =
+  process.env.AUTH_EXPOSE_VERIFICATION_CODE != null
+    ? String(process.env.AUTH_EXPOSE_VERIFICATION_CODE).trim().toLowerCase() === 'true'
+    : process.env.NODE_ENV !== 'production'
 
 const GOOGLE_CLIENT_ID = (process.env.GOOGLE_CLIENT_ID ?? '').trim()
 const APPLE_CLIENT_ID = (process.env.APPLE_CLIENT_ID ?? '').trim()
@@ -5345,7 +5352,7 @@ const recordingCleanupTimer = setInterval(() => {
 if (typeof recordingCleanupTimer.unref === 'function') recordingCleanupTimer.unref()
 
 app.listen(API_PORT, () => {
-  console.log(`VensuR API activa en http://127.0.0.1:${API_PORT}`)
+  console.log(`VensuR API activa en el puerto ${API_PORT} (NODE_ENV=${process.env.NODE_ENV || 'development'})`)
   purgeExpiredLiveRecordings()
   void startBotsAutomation()
 })
