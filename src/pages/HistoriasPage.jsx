@@ -1,16 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { markStoryViewed } from '../services/storiesApi'
 import './Pages.css'
 
-const DEFAULT_STORY_DURATION_MS = 5_000
-const STORY_DURATION_STORAGE_KEY = 'vensur.story.duration.ms'
-const STORY_DURATION_OPTIONS = [
-  { label: '3s', value: 3_000 },
-  { label: '5s', value: 5_000 },
-  { label: '7s', value: 7_000 },
-  { label: '10s', value: 10_000 },
-]
+// Un video se repite hasta 3 veces; si el usuario no se mueve, pasa solo al siguiente.
+const VIDEO_MAX_LOOPS = 3
+// Las historias de solo imagen/texto avanzan solas tras unos segundos (sin barra visible).
+const IMAGE_DURATION_MS = 7000
 
 const STORY_FILTER_CSS_BY_NAME = {
   none: 'none',
@@ -32,30 +28,21 @@ const STORY_FILTER_CSS_BY_NAME = {
   perpetua: 'contrast(1.05) brightness(1.05) saturate(1.1) hue-rotate(5deg)',
 }
 
-function readSavedDuration() {
-  if (typeof window === 'undefined') return DEFAULT_STORY_DURATION_MS
-
-  const raw = window.localStorage.getItem(STORY_DURATION_STORAGE_KEY)
-  const parsed = Number.parseInt(raw ?? '', 10)
-  const isAllowed = STORY_DURATION_OPTIONS.some((option) => option.value === parsed)
-
-  return isAllowed ? parsed : DEFAULT_STORY_DURATION_MS
-}
+const REEL_GRADIENTS = [
+  'radial-gradient(circle at 25% 20%, #2b4d86, transparent 45%), linear-gradient(160deg, #0d1320, #241019)',
+  'radial-gradient(circle at 75% 25%, #7a3a2b, transparent 45%), linear-gradient(160deg, #131a12, #241a10)',
+  'radial-gradient(circle at 30% 75%, #2c6b63, transparent 45%), linear-gradient(160deg, #0c1720, #1c1226)',
+  'radial-gradient(circle at 70% 70%, #6a2f52, transparent 45%), linear-gradient(160deg, #10131f, #200f18)',
+]
 
 function isVideoStory(story) {
-  if (typeof story?.mediaType === 'string' && story.mediaType.startsWith('video/')) {
-    return true
-  }
-
+  if (typeof story?.mediaType === 'string' && story.mediaType.startsWith('video/')) return true
   const mediaUrl = typeof story?.mediaUrl === 'string' ? story.mediaUrl.toLowerCase() : ''
   return /\.(mp4|webm|mov|m4v)(\?|$)/.test(mediaUrl)
 }
 
 function isAudioStory(story) {
-  if (typeof story?.mediaType === 'string' && story.mediaType.startsWith('audio/')) {
-    return true
-  }
-
+  if (typeof story?.mediaType === 'string' && story.mediaType.startsWith('audio/')) return true
   const mediaUrl = typeof story?.mediaUrl === 'string' ? story.mediaUrl.toLowerCase() : ''
   return /\.(mp3|wav|ogg|m4a|aac|flac)(\?|$)/.test(mediaUrl)
 }
@@ -71,24 +58,12 @@ function normalizeStoryEditor(editor) {
   const overlayText = typeof source.overlayText === 'string' ? source.overlayText.trim().slice(0, 180) : ''
   const locationTag = typeof source.locationTag === 'string' ? source.locationTag.trim().slice(0, 42) : ''
   const clockLabel = typeof source.clockLabel === 'string' ? source.clockLabel.trim().slice(0, 16) : ''
-  const textColor = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(source.textColor || '')
-    ? source.textColor
-    : '#ffffff'
+  const textColor = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(source.textColor || '') ? source.textColor : '#ffffff'
   const textSize = clampNumber(source.textSize, 18, 58, 34)
   const textPositionY = clampNumber(source.textPositionY, 10, 86, 72)
   const textAlign = ['left', 'center', 'right'].includes(source.textAlign) ? source.textAlign : 'center'
   const filter = STORY_FILTER_CSS_BY_NAME[source.filter] ? source.filter : 'none'
-
-  return {
-    overlayText,
-    locationTag,
-    clockLabel,
-    textColor,
-    textSize,
-    textPositionY,
-    textAlign,
-    filter,
-  }
+  return { overlayText, locationTag, clockLabel, textColor, textSize, textPositionY, textAlign, filter }
 }
 
 function resolveStoryFilter(filterName) {
@@ -98,12 +73,10 @@ function resolveStoryFilter(filterName) {
 function readStoryMusic(story) {
   const music = story && typeof story.music === 'object' ? story.music : null
   if (!music) return null
-
   const previewUrl = typeof music.previewUrl === 'string' ? music.previewUrl : ''
   const title = typeof music.title === 'string' ? music.title.trim() : ''
   const artist = typeof music.artist === 'string' ? music.artist.trim() : ''
   if (!previewUrl || !title) return null
-
   return {
     ...music,
     previewUrl,
@@ -114,354 +87,343 @@ function readStoryMusic(story) {
   }
 }
 
-function storyPath(storyId) {
-  return `/historias/${encodeURIComponent(String(storyId))}`
+/**
+ * Una historia a pantalla completa dentro del feed vertical.
+ * @param {{
+ *  story: any, index: number, active: boolean, loadMedia: boolean, muted: boolean,
+ *  onAdvance: (index: number) => void, onToggleMute: () => void
+ * }} props
+ */
+function StoryReel({ story, index, active, loadMedia, muted, onAdvance, onToggleMute }) {
+  const mediaRef = useRef(null)
+  const musicRef = useRef(null)
+  const loopsRef = useRef(0)
+  const [held, setHeld] = useState(false)
+
+  const editor = useMemo(() => normalizeStoryEditor(story?.editor), [story?.editor])
+  const music = useMemo(() => readStoryMusic(story), [story])
+
+  const isVideo = isVideoStory(story)
+  const isAudio = isAudioStory(story)
+  const hasMedia = Boolean(story?.mediaUrl)
+  const isImage = hasMedia && !isVideo && !isAudio
+  const mediaFilter = resolveStoryFilter(editor.filter)
+  const musicLabel = music ? `${music.title}${music.artist ? ` · ${music.artist}` : ''}` : ''
+  const hasAudioTrack = isVideo || isAudio || Boolean(music?.previewUrl)
+  const reactions = Number.isFinite(Number(story?.reactions)) ? Number(story.reactions) : 0
+
+  // Reproduce / pausa según sea la historia activa.
+  useEffect(() => {
+    const media = mediaRef.current
+    const musicEl = musicRef.current
+
+    if (!active || held) {
+      media?.pause?.()
+      musicEl?.pause?.()
+      return undefined
+    }
+
+    loopsRef.current = 0
+    if (media) {
+      try {
+        media.currentTime = 0
+      } catch {
+        // no-op
+      }
+      media.play?.().catch(() => {})
+    }
+    if (musicEl) {
+      try {
+        musicEl.currentTime = music?.startSeconds || 0
+      } catch {
+        // no-op
+      }
+      musicEl.volume = music?.volume ?? 0.85
+      musicEl.play?.().catch(() => {})
+    }
+
+    let imageTimer
+    if (!isVideo && !isAudio) {
+      imageTimer = window.setTimeout(() => onAdvance(index), IMAGE_DURATION_MS)
+    }
+    return () => {
+      if (imageTimer) window.clearTimeout(imageTimer)
+    }
+  }, [active, held, isVideo, isAudio, index, music?.startSeconds, music?.volume, onAdvance])
+
+  // Silencio (sin reiniciar el video).
+  useEffect(() => {
+    if (mediaRef.current) mediaRef.current.muted = muted
+    if (musicRef.current) musicRef.current.muted = muted
+  }, [muted])
+
+  const handleEnded = () => {
+    loopsRef.current += 1
+    if (loopsRef.current >= VIDEO_MAX_LOOPS) {
+      onAdvance(index)
+      return
+    }
+    const media = mediaRef.current
+    if (media) {
+      try {
+        media.currentTime = 0
+      } catch {
+        // no-op
+      }
+      media.play?.().catch(() => {})
+    }
+  }
+
+  const toggleHold = () => {
+    setHeld((current) => {
+      const next = !current
+      const media = mediaRef.current
+      if (media) {
+        if (next) media.pause?.()
+        else media.play?.().catch(() => {})
+      }
+      return next
+    })
+  }
+
+  const gradient = REEL_GRADIENTS[index % REEL_GRADIENTS.length]
+
+  return (
+    <article className="reel" data-index={index}>
+      <div
+        className="reel-media"
+        onClick={hasMedia && !isImage ? toggleHold : undefined}
+        role={hasMedia && !isImage ? 'button' : undefined}
+        style={{ background: gradient }}
+      >
+        {!loadMedia ? null : isVideo ? (
+          <video
+            className="reel-fill"
+            muted={muted}
+            onEnded={handleEnded}
+            playsInline
+            preload={active ? 'auto' : 'metadata'}
+            ref={mediaRef}
+            src={story.mediaUrl}
+            style={{ filter: mediaFilter }}
+          />
+        ) : isImage ? (
+          <img
+            alt={story.label}
+            className="reel-fill"
+            loading={active ? 'eager' : 'lazy'}
+            src={story.mediaUrl}
+            style={{ filter: mediaFilter }}
+          />
+        ) : isAudio ? (
+          <div className="reel-audio">
+            <span>{story.label}</span>
+            <small>Historia con audio</small>
+            <audio muted={muted} onEnded={handleEnded} preload="metadata" ref={mediaRef} src={story.mediaUrl} />
+          </div>
+        ) : (
+          <p className="reel-textcard">{editor.overlayText || story.label}</p>
+        )}
+
+        {loadMedia && music?.previewUrl && !isAudio ? (
+          <audio loop muted={muted} preload="metadata" ref={musicRef} src={music.previewUrl} />
+        ) : null}
+
+        {editor.overlayText && (hasMedia || isVideo || isAudio) ? (
+          <div
+            className={`reel-overlay align-${editor.textAlign}`}
+            style={{ color: editor.textColor, fontSize: `${editor.textSize}px`, top: `${editor.textPositionY}%` }}
+          >
+            {editor.overlayText}
+          </div>
+        ) : null}
+
+        {editor.locationTag ? <span className="reel-chip reel-chip-loc">📍 {editor.locationTag}</span> : null}
+        {editor.clockLabel ? <span className="reel-chip reel-chip-clock">🕒 {editor.clockLabel}</span> : null}
+        {musicLabel ? <span className="reel-chip reel-chip-music">♪ {musicLabel}</span> : null}
+
+        {held ? (
+          <span className="reel-held" aria-hidden="true">
+            ▶
+          </span>
+        ) : null}
+      </div>
+
+      {hasAudioTrack ? (
+        <button
+          aria-label={muted ? 'Activar sonido' : 'Silenciar'}
+          className="reel-mute"
+          onClick={(event) => {
+            event.stopPropagation()
+            onToggleMute()
+          }}
+          type="button"
+        >
+          {muted ? '🔇' : '🔊'}
+        </button>
+      ) : null}
+
+      <footer className="reel-caption">
+        <strong>{story.label}</strong>
+        <p>
+          {story.source || 'Comunidad'} · {reactions} {reactions === 1 ? 'reacción' : 'reacciones'}
+        </p>
+        {story.externalUrl ? (
+          <a href={story.externalUrl} rel="noreferrer" target="_blank">
+            Ver fuente
+          </a>
+        ) : null}
+      </footer>
+    </article>
+  )
 }
 
 /**
- * @param {{
- * stories: import('../data/feedData').StoryItem[]
- * }} props
+ * @param {{ stories: import('../data/feedData').StoryItem[] }} props
  */
 export default function HistoriasPage({ stories }) {
   const navigate = useNavigate()
   const { storyId } = useParams()
-  const mediaRef = useRef(null)
-  const musicRef = useRef(null)
-  const [storyDurationMs, setStoryDurationMs] = useState(readSavedDuration)
-  const [isPaused, setIsPaused] = useState(false)
-  const [isMuted, setIsMuted] = useState(false)
+  const containerRef = useRef(null)
+  const activeIndexRef = useRef(0)
+  const scrollRafRef = useRef(0)
+  const didInitRef = useRef(false)
+
+  const [activeIndex, setActiveIndex] = useState(0)
+  const [muted, setMuted] = useState(true)
+  const [showSoundHint, setShowSoundHint] = useState(true)
+  const [wantedId] = useState(() => (storyId ? String(storyId) : ''))
 
   const items = useMemo(() => {
     if (!Array.isArray(stories)) return []
-
-    return stories
-      .filter(Boolean)
-      .map((story, index) => ({
-        ...story,
-        id: story?.id ? String(story.id) : `story-${index}`,
-        label: typeof story?.label === 'string' && story.label.trim() ? story.label.trim() : 'Historia',
-      }))
+    return stories.filter(Boolean).map((story, index) => ({
+      ...story,
+      id: story?.id ? String(story.id) : `story-${index}`,
+      label: typeof story?.label === 'string' && story.label.trim() ? story.label.trim() : 'Historia',
+    }))
   }, [stories])
 
-  const currentIndex = useMemo(() => {
-    if (!items.length) return -1
-    if (!storyId) return 0
+  const scrollToIndex = useCallback(
+    (index, smooth = true) => {
+      const container = containerRef.current
+      if (!container || items.length === 0) return
+      const clamped = Math.max(0, Math.min(index, items.length - 1))
+      container.scrollTo({ top: clamped * container.clientHeight, behavior: smooth ? 'smooth' : 'auto' })
+    },
+    [items.length],
+  )
 
-    const index = items.findIndex((story) => story.id === storyId)
-    return index >= 0 ? index : 0
-  }, [items, storyId])
+  // Avance automático (fin de video x3 o temporizador de imagen).
+  const advanceFrom = useCallback(
+    (index) => {
+      if (index !== activeIndexRef.current) return
+      if (index >= items.length - 1) return
+      scrollToIndex(index + 1)
+    },
+    [items.length, scrollToIndex],
+  )
 
-  const currentStory = currentIndex >= 0 ? items[currentIndex] : null
+  const toggleMute = useCallback(() => {
+    setMuted((current) => !current)
+    setShowSoundHint(false)
+  }, [])
 
+  const handleScroll = useCallback(() => {
+    if (scrollRafRef.current) return
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = 0
+      const container = containerRef.current
+      if (!container) return
+      const index = Math.round(container.scrollTop / Math.max(1, container.clientHeight))
+      if (index !== activeIndexRef.current && index >= 0 && index < items.length) {
+        activeIndexRef.current = index
+        setActiveIndex(index)
+      }
+    })
+  }, [items.length])
+
+  // Posiciona en la historia pedida por la URL (una sola vez, al cargar).
+  // No tocamos el estado aquí: al hacer scroll, handleScroll fija la activa.
   useEffect(() => {
-    const id = currentStory?.id
-    if (id && !String(id).startsWith('story-')) {
-      void markStoryViewed(id)
+    if (didInitRef.current || items.length === 0) return
+    didInitRef.current = true
+    if (!wantedId) return
+    const index = items.findIndex((story) => story.id === wantedId)
+    if (index > 0) scrollToIndex(index, false)
+  }, [items, wantedId, scrollToIndex])
+
+  // Sincroniza la URL + marca vista cuando cambia la historia activa.
+  useEffect(() => {
+    const story = items[activeIndex]
+    if (!story) return
+    if (story.id && !story.id.startsWith('story-')) {
+      void markStoryViewed(story.id)
+      if (story.id !== storyId) {
+        navigate(`/historias/${encodeURIComponent(story.id)}`, { replace: true })
+      }
     }
-  }, [currentStory?.id])
+  }, [activeIndex, items, navigate, storyId])
 
-  const storyEditor = useMemo(() => normalizeStoryEditor(currentStory?.editor), [currentStory?.editor])
-  const storyMusic = useMemo(() => readStoryMusic(currentStory), [currentStory])
+  // Flechas del teclado para navegar.
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.key === 'ArrowDown' || event.key === 'PageDown') {
+        event.preventDefault()
+        scrollToIndex(activeIndexRef.current + 1)
+      } else if (event.key === 'ArrowUp' || event.key === 'PageUp') {
+        event.preventDefault()
+        scrollToIndex(activeIndexRef.current - 1)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [scrollToIndex])
 
   useEffect(() => {
-    if (!items.length || currentIndex < 0) return
-
-    const selected = items[currentIndex]
-    if (!selected) return
-    if (selected.id === storyId) return
-
-    navigate(storyPath(selected.id), { replace: true })
-  }, [currentIndex, items, navigate, storyId])
-
-  useEffect(() => {
-    if (items.length < 2 || currentIndex < 0 || isPaused) return
-
-    const timerId = window.setTimeout(() => {
-      const nextIndex = (currentIndex + 1) % items.length
-      const nextStory = items[nextIndex]
-      if (!nextStory) return
-
-      navigate(storyPath(nextStory.id), { replace: true })
-    }, storyDurationMs)
-
     return () => {
-      window.clearTimeout(timerId)
+      if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current)
     }
-  }, [currentIndex, isPaused, items, navigate, storyDurationMs])
+  }, [])
 
-  useEffect(() => {
-    const mediaElement = mediaRef.current
-    const musicElement = musicRef.current
-
-    if (mediaElement) {
-      mediaElement.muted = isMuted
-
-      const playAttempt = mediaElement.play?.()
-      if (playAttempt && typeof playAttempt.catch === 'function') {
-        playAttempt.catch(() => {
-          if (!isMuted) {
-            setIsMuted(true)
-          }
-        })
-      }
-    }
-
-    if (musicElement) {
-      musicElement.muted = isMuted
-
-      const volume = Number.isFinite(Number(storyMusic?.volume))
-        ? Number(storyMusic.volume)
-        : 0.8
-      musicElement.volume = Math.max(0.05, Math.min(1, volume))
-
-      const startSeconds = Number.isFinite(Number(storyMusic?.startSeconds))
-        ? Number(storyMusic.startSeconds)
-        : 0
-      const targetTime = Math.max(0, startSeconds)
-
-      try {
-        if (Math.abs((musicElement.currentTime || 0) - targetTime) > 0.75) {
-          musicElement.currentTime = targetTime
-        }
-      } catch {
-        // No-op.
-      }
-
-      const musicPlay = musicElement.play?.()
-      if (musicPlay && typeof musicPlay.catch === 'function') {
-        musicPlay.catch(() => {
-          if (!isMuted) {
-            setIsMuted(true)
-          }
-        })
-      }
-    }
-  }, [currentStory?.id, isMuted, storyMusic?.startSeconds, storyMusic?.volume])
-
-  function handleDurationChange(event) {
-    const nextValue = Number.parseInt(event.target.value, 10)
-    const selected = STORY_DURATION_OPTIONS.find((option) => option.value === nextValue)
-    const value = selected ? selected.value : DEFAULT_STORY_DURATION_MS
-
-    setStoryDurationMs(value)
-
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(STORY_DURATION_STORAGE_KEY, String(value))
-    }
-  }
-
-  function goToRelative(step) {
-    if (!items.length || currentIndex < 0) return
-
-    const nextIndex = (currentIndex + step + items.length) % items.length
-    const nextStory = items[nextIndex]
-    if (!nextStory) return
-
-    navigate(storyPath(nextStory.id), { replace: true })
-  }
-
-  if (!currentStory) {
+  if (items.length === 0) {
     return (
-      <section className="feed route-page stories-view-page">
-        <p className="route-message">No hay historias para mostrar todavia.</p>
-        <Link className="stories-view-back" to="/">
+      <section className="feed route-page reels-empty">
+        <p className="route-message">No hay historias para mostrar todavía.</p>
+        <Link className="reel-back-link" to="/">
           Volver al inicio
         </Link>
       </section>
     )
   }
 
-  const isVideo = isVideoStory(currentStory)
-  const isAudio = isAudioStory(currentStory)
-  const hasAudioTrack = isVideo || isAudio || Boolean(storyMusic?.previewUrl)
-  const storyReactions = Number.isFinite(Number(currentStory.reactions))
-    ? Number(currentStory.reactions)
-    : 0
-  const mediaFilter = resolveStoryFilter(storyEditor.filter)
-  const storyMusicLabel = storyMusic
-    ? `${storyMusic.title}${storyMusic.artist ? ` · ${storyMusic.artist}` : ''}`
-    : ''
-
   return (
-    <section className="feed route-page stories-view-page">
-      <header className="stories-view-top">
-        <Link className="stories-view-back" to="/">
-          Volver al inicio
+    <section className="reels-page">
+      <div className="reels-frame">
+        <Link className="reels-close" to="/" aria-label="Cerrar historias">
+          ✕
         </Link>
 
-        <label className="stories-view-speed">
-          Duracion
-          <select onChange={handleDurationChange} value={storyDurationMs}>
-            {STORY_DURATION_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <div className="stories-view-progress" aria-label="Progreso de historias">
-          {items.map((story, index) => {
-            const isActive = index === currentIndex
-            const isViewed = index < currentIndex
-
-            return (
-              <span
-                className={`stories-view-progress-item ${isViewed ? 'viewed' : ''}`}
-                key={story.id}
-              >
-                {isActive ? (
-                  <span
-                    className="stories-view-progress-run"
-                    key={`${story.id}-${storyDurationMs}`}
-                    style={{
-                      animationDuration: `${storyDurationMs}ms`,
-                      animationPlayState: isPaused ? 'paused' : 'running',
-                    }}
-                  />
-                ) : null}
-              </span>
-            )
-          })}
-        </div>
-
-        <span className="stories-view-count">
-          {currentIndex + 1}/{items.length}
-        </span>
-      </header>
-
-      <article
-        className="stories-view-stage"
-        onMouseEnter={() => setIsPaused(true)}
-        onMouseLeave={() => setIsPaused(false)}
-      >
-        {currentStory.mediaUrl ? (
-          isVideo ? (
-            <video
-              autoPlay
-              className="stories-view-media"
-              muted={isMuted}
-              playsInline
-              preload="metadata"
-              ref={mediaRef}
-              src={currentStory.mediaUrl}
-              style={{ filter: mediaFilter }}
-            />
-          ) : isAudio ? (
-            <div className="stories-view-fallback stories-view-fallback-audio">
-              <span>{currentStory.label}</span>
-              <small>Historia con musica/audio</small>
-              <audio
-                autoPlay
-                className="stories-view-audio-player"
-                muted={isMuted}
-                preload="metadata"
-                ref={mediaRef}
-                src={currentStory.mediaUrl}
-              />
-            </div>
-          ) : (
-            <img
-              alt={currentStory.label}
-              className="stories-view-media"
-              loading="eager"
-              src={currentStory.mediaUrl}
-              style={{ filter: mediaFilter }}
-            />
-          )
-        ) : (
-          <div className="stories-view-fallback">
-            <span>{currentStory.label}</span>
-          </div>
-        )}
-
-        {storyMusic?.previewUrl && !isAudio ? (
-          <audio
-            autoPlay
-            className="stories-view-hidden-audio"
-            loop
-            muted={isMuted}
-            preload="metadata"
-            ref={musicRef}
-            src={storyMusic.previewUrl}
-          />
-        ) : null}
-
-        {storyEditor.overlayText ? (
-          <div
-            className={`stories-view-overlay align-${storyEditor.textAlign}`}
-            style={{
-              color: storyEditor.textColor,
-              fontSize: `${storyEditor.textSize}px`,
-              top: `${storyEditor.textPositionY}%`,
-            }}
-          >
-            {storyEditor.overlayText}
-          </div>
-        ) : null}
-
-        {storyEditor.locationTag ? (
-          <span className="stories-view-overlay-location">📍 {storyEditor.locationTag}</span>
-        ) : null}
-
-        {storyEditor.clockLabel ? (
-          <span className="stories-view-overlay-clock">🕒 {storyEditor.clockLabel}</span>
-        ) : null}
-
-        {storyMusicLabel ? (
-          <span className="stories-view-overlay-music">♪ {storyMusicLabel}</span>
-        ) : null}
-
-        <button
-          aria-label="Historia anterior"
-          className="stories-view-nav prev"
-          onClick={() => goToRelative(-1)}
-          type="button"
-        >
-          ‹
-        </button>
-        <button
-          aria-label="Historia siguiente"
-          className="stories-view-nav next"
-          onClick={() => goToRelative(1)}
-          type="button"
-        >
-          ›
-        </button>
-
-        {hasAudioTrack ? (
-          <button
-            aria-label={isMuted ? 'Activar sonido' : 'Silenciar sonido'}
-            className={`stories-view-audio-toggle ${isMuted ? 'muted' : 'unmuted'}`}
-            onClick={() => setIsMuted((current) => !current)}
-            title={isMuted ? 'Activar sonido' : 'Silenciar sonido'}
-            type="button"
-          >
-            <span className="stories-view-audio-icon" aria-hidden="true">
-              <span className="stories-view-audio-waves" />
-            </span>
+        {showSoundHint ? (
+          <button className="reels-sound-hint" onClick={toggleMute} type="button">
+            🔇 Toca para activar el sonido
           </button>
         ) : null}
 
-        <footer className="stories-view-caption">
-          <div>
-            <strong>{currentStory.label}</strong>
-            <p>
-              {currentStory.source || 'Comunidad'}
-              {isPaused ? ' · Pausado' : ''}
-              {` · ${storyReactions} reacciones`}
-            </p>
-            {storyMusicLabel ? <p className="stories-view-music-meta">Musica: {storyMusicLabel}</p> : null}
-          </div>
-
-          {currentStory.externalUrl ? (
-            <a href={currentStory.externalUrl} rel="noreferrer">
-              Ver fuente
-            </a>
-          ) : null}
-        </footer>
-      </article>
+        <div className="reels-viewer" onScroll={handleScroll} ref={containerRef}>
+          {items.map((story, index) => (
+            <StoryReel
+              active={index === activeIndex}
+              index={index}
+              key={story.id}
+              loadMedia={Math.abs(index - activeIndex) <= 1}
+              muted={muted}
+              onAdvance={advanceFrom}
+              onToggleMute={toggleMute}
+              story={story}
+            />
+          ))}
+        </div>
+      </div>
     </section>
   )
 }
