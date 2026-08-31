@@ -1,4 +1,5 @@
 import '../composer/StoryStudio.css'
+import './LiveStudio.css'
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useLiveBroadcast } from '../../contexts/LiveBroadcastContext'
@@ -8,6 +9,52 @@ function initialsOf(user) {
   return source.slice(0, 2).toUpperCase()
 }
 
+/** Barra de nivel del micrófono: confirma que el audio entra antes de salir en vivo. */
+function MicLevelMeter({ stream }) {
+  const [level, setLevel] = useState(0)
+
+  useEffect(() => {
+    const audioTrack = stream?.getAudioTracks?.()[0]
+    const AudioCtx = window.AudioContext || window.webkitAudioContext
+    if (!audioTrack || !AudioCtx) return undefined
+
+    const ctx = new AudioCtx()
+    const source = ctx.createMediaStreamSource(new MediaStream([audioTrack]))
+    const analyser = ctx.createAnalyser()
+    analyser.fftSize = 512
+    source.connect(analyser)
+    const data = new Uint8Array(analyser.frequencyBinCount)
+    let raf = 0
+
+    const tick = () => {
+      analyser.getByteTimeDomainData(data)
+      let peak = 0
+      for (let i = 0; i < data.length; i += 1) {
+        const v = Math.abs(data[i] - 128) / 128
+        if (v > peak) peak = v
+      }
+      setLevel((prev) => prev * 0.7 + Math.min(1, peak * 1.6) * 0.3)
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+
+    return () => {
+      cancelAnimationFrame(raf)
+      source.disconnect()
+      void ctx.close()
+    }
+  }, [stream])
+
+  return (
+    <div className="live-mic-meter" aria-hidden="true">
+      <span className="live-mic-meter-icon">🎤</span>
+      <span className="live-mic-meter-track">
+        <span className="live-mic-meter-fill" style={{ width: `${Math.round(level * 100)}%` }} />
+      </span>
+    </div>
+  )
+}
+
 /** Se monta fresco cada vez que se abre el estudio (LiveOverlays lo condiciona). */
 export default function LiveStudio() {
   const { user } = useAuth()
@@ -15,11 +62,17 @@ export default function LiveStudio() {
     stream,
     isCameraReady,
     includeAudio,
+    mediaInputs,
+    selectedCameraId,
+    selectedMicId,
     isPreparing,
     isStarting,
     status,
     error,
     setIncludeAudio,
+    setSelectedCameraId,
+    setSelectedMicId,
+    refreshDeviceList,
     prepareCamera,
     startBroadcast,
     closeStudio,
@@ -27,6 +80,10 @@ export default function LiveStudio() {
 
   const videoRef = useRef(null)
   const [draft, setDraft] = useState({ title: '', description: '', acceptedTerms: false })
+
+  useEffect(() => {
+    void refreshDeviceList()
+  }, [refreshDeviceList])
 
   useEffect(() => {
     const node = videoRef.current
@@ -37,15 +94,26 @@ export default function LiveStudio() {
   }, [stream])
 
   const onConfigureCamera = () => {
-    if (!draft.acceptedTerms) {
-      return
-    }
-    void prepareCamera({ includeAudio })
+    if (!draft.acceptedTerms) return
+    void prepareCamera({ includeAudio, cameraId: selectedCameraId, micId: selectedMicId })
+  }
+
+  const onChangeCamera = (deviceId) => {
+    setSelectedCameraId(deviceId)
+    if (isCameraReady) void prepareCamera({ includeAudio, cameraId: deviceId, micId: selectedMicId })
+  }
+
+  const onChangeMic = (deviceId) => {
+    setSelectedMicId(deviceId)
+    if (isCameraReady) void prepareCamera({ includeAudio: true, cameraId: selectedCameraId, micId: deviceId })
   }
 
   const onStart = async () => {
     await startBroadcast({ title: draft.title, description: draft.description })
   }
+
+  const cameras = mediaInputs?.cameras || []
+  const microphones = mediaInputs?.microphones || []
 
   return (
     <div className="story-studio-backdrop" role="dialog" aria-modal="true" aria-label="Estudio de en vivo">
@@ -85,15 +153,54 @@ export default function LiveStudio() {
               />
             </label>
 
+            <label className="story-field">
+              Cámara
+              <select
+                disabled={isPreparing}
+                onChange={(event) => onChangeCamera(event.target.value)}
+                value={selectedCameraId}
+              >
+                {cameras.length === 0 ? <option value="">Cámara predeterminada</option> : null}
+                {cameras.map((cam) => (
+                  <option key={cam.deviceId || cam.label} value={cam.deviceId}>{cam.label}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="story-field">
+              Micrófono
+              <select
+                disabled={isPreparing || !includeAudio}
+                onChange={(event) => onChangeMic(event.target.value)}
+                value={selectedMicId}
+              >
+                {microphones.length === 0 ? <option value="">Micrófono predeterminado</option> : null}
+                {microphones.map((mic) => (
+                  <option key={mic.deviceId || mic.label} value={mic.deviceId}>{mic.label}</option>
+                ))}
+              </select>
+            </label>
+
             <label className="story-studio-switch">
               <input
                 checked={includeAudio}
-                disabled={isPreparing || isCameraReady}
-                onChange={(event) => setIncludeAudio(event.target.checked)}
+                disabled={isPreparing}
+                onChange={(event) => {
+                  setIncludeAudio(event.target.checked)
+                  if (isCameraReady) {
+                    void prepareCamera({
+                      includeAudio: event.target.checked,
+                      cameraId: selectedCameraId,
+                      micId: selectedMicId,
+                    })
+                  }
+                }}
                 type="checkbox"
               />
-              Incluir micrófono
+              Transmitir con micrófono
             </label>
+
+            {isCameraReady && includeAudio ? <MicLevelMeter stream={stream} /> : null}
 
             <label className="story-studio-switch">
               <input
@@ -113,8 +220,8 @@ export default function LiveStudio() {
               {isPreparing
                 ? 'Solicitando permisos...'
                 : isCameraReady
-                  ? '↻ Reconfigurar cámara'
-                  : '📷 Configurar cámara'}
+                  ? '↻ Reconfigurar cámara y micrófono'
+                  : '🎥 Configurar cámara y micrófono'}
             </button>
 
             <p className="story-hint">
@@ -148,7 +255,7 @@ export default function LiveStudio() {
               {!isCameraReady ? (
                 <div className="live-stage-empty">
                   <span>📹</span>
-                  Configura la cámara para ver la vista previa
+                  Configura la cámara y el micrófono para ver la vista previa
                 </div>
               ) : null}
             </div>

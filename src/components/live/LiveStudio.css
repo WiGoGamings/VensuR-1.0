@@ -1,0 +1,28 @@
+.live-mic-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+}
+
+.live-mic-meter-icon {
+  font-size: 14px;
+  flex: 0 0 auto;
+}
+
+.live-mic-meter-track {
+  flex: 1 1 auto;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--panel-2, #1a2130);
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+.live-mic-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #26c281, #f2b705 70%, #e92a4a);
+  transition: width 90ms linear;
+}

@@ -2,7 +2,104 @@ import './LiveOverlays.css'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { formatElapsed, useElapsed, useLiveBroadcast } from '../../contexts/LiveBroadcastContext'
+import { LIVE_CHAT_EMOJIS, LIVE_CHAT_TEXT_MAX, chatInitials } from './liveChatEmojis'
 import LiveStudio from './LiveStudio'
+
+function LiveMonitorChat() {
+  const { chatMessages, chatError, sendChatMessage } = useLiveBroadcast()
+  const [draft, setDraft] = useState('')
+  const [showEmojis, setShowEmojis] = useState(false)
+  const [isSending, setIsSending] = useState(false)
+  const listRef = useRef(null)
+
+  useEffect(() => {
+    const node = listRef.current
+    if (node) node.scrollTop = node.scrollHeight
+  }, [chatMessages])
+
+  const submit = async (event) => {
+    event.preventDefault()
+    const text = draft.trim()
+    if (!text || isSending) return
+    setIsSending(true)
+    try {
+      await sendChatMessage(text)
+      setDraft('')
+      setShowEmojis(false)
+    } finally {
+      setIsSending(false)
+    }
+  }
+
+  return (
+    <div className="live-monitor-chat">
+      <span className="live-monitor-chat-title">Chat en vivo</span>
+
+      <div className="live-monitor-chat-list" ref={listRef}>
+        {chatMessages.length === 0 ? (
+          <p className="live-monitor-chat-empty">
+            Aún no hay mensajes. Cuando alguien escriba o te siga, lo verás aquí.
+          </p>
+        ) : (
+          chatMessages.map((message) =>
+            message.kind === 'system' ? (
+              <div className="live-monitor-chat-system" key={message.id}>
+                {message.event === 'follow' ? '➕ ' : '📣 '}
+                {message.text}
+              </div>
+            ) : (
+              <div className="live-monitor-chat-msg" key={message.id}>
+                <span className="live-monitor-chat-avatar" aria-hidden="true">
+                  {message.avatarUrl ? <img alt="" src={message.avatarUrl} /> : chatInitials(message.displayName)}
+                </span>
+                <p>
+                  <b>{message.displayName}</b> {message.text}
+                </p>
+              </div>
+            ),
+          )
+        )}
+      </div>
+
+      {chatError ? <p className="live-monitor-chat-error">{chatError}</p> : null}
+
+      {showEmojis ? (
+        <div className="live-monitor-chat-emojis">
+          {LIVE_CHAT_EMOJIS.map((emoji) => (
+            <button
+              key={emoji}
+              onClick={() => setDraft((current) => `${current}${emoji}`.slice(0, LIVE_CHAT_TEXT_MAX))}
+              type="button"
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <form className="live-monitor-chat-form" onSubmit={submit}>
+        <button
+          aria-label="Emojis"
+          className="live-monitor-chat-emoji"
+          onClick={() => setShowEmojis((current) => !current)}
+          type="button"
+        >
+          😊
+        </button>
+        <input
+          aria-label="Responde en el chat"
+          maxLength={LIVE_CHAT_TEXT_MAX}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder="Responde a tu audiencia…"
+          value={draft}
+        />
+        <button disabled={!draft.trim() || isSending} type="submit">
+          Enviar
+        </button>
+      </form>
+    </div>
+  )
+}
 
 function SelfVideo({ stream, className }) {
   const ref = useRef(null)
@@ -47,6 +144,7 @@ function LiveMonitor() {
     meta,
     viewerCount,
     viewers,
+    liveLikes,
     startedAt,
     sharePath,
     isStopping,
@@ -88,46 +186,58 @@ function LiveMonitor() {
           </div>
 
           <aside className="live-monitor-side">
-            <div className="live-monitor-stat">
-              <b>{viewerCount}</b>
-              <span>{viewerCount === 1 ? 'persona viendo' : 'personas viendo'}</span>
-            </div>
-
-            <div className="live-monitor-share">
-              <span>Enlace para compartir</span>
-              <div>
-                <input readOnly value={shareUrl} />
-                <button onClick={copyLink} type="button">{copied ? '¡Copiado!' : 'Copiar'}</button>
+            <div className="live-monitor-metrics">
+              <div className="live-monitor-stat">
+                <b>{viewerCount}</b>
+                <span>{viewerCount === 1 ? 'viendo' : 'viendo'}</span>
               </div>
-              <Link className="live-monitor-open" to={sharePath} target="_blank" rel="noreferrer">
-                Abrir la sala en otra pestaña ↗
-              </Link>
+              <div className="live-monitor-stat">
+                <b>{liveLikes}</b>
+                <span>me gusta</span>
+              </div>
             </div>
 
-            <div className="live-monitor-viewers">
-              <span>Espectadores conectados</span>
-              {viewers.length ? (
-                <ul>
-                  {viewers.map((viewer) => (
-                    <li key={viewer.viewerId}>
-                      <span className="live-monitor-viewer-avatar">
-                        {viewer.avatarUrl ? (
-                          <img alt="" src={viewer.avatarUrl} />
-                        ) : (
-                          (viewer.displayName || 'E').slice(0, 1).toUpperCase()
-                        )}
-                      </span>
-                      <span className="live-monitor-viewer-name">
-                        {viewer.displayName}
-                        {viewer.username ? <small>@{viewer.username}</small> : null}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="live-monitor-empty">Aún nadie se ha conectado. Comparte el enlace.</p>
-              )}
-            </div>
+            <LiveMonitorChat />
+
+            <details className="live-monitor-more">
+              <summary>Compartir y espectadores</summary>
+
+              <div className="live-monitor-share">
+                <span>Enlace para compartir</span>
+                <div>
+                  <input readOnly value={shareUrl} />
+                  <button onClick={copyLink} type="button">{copied ? '¡Copiado!' : 'Copiar'}</button>
+                </div>
+                <Link className="live-monitor-open" to={sharePath} target="_blank" rel="noreferrer">
+                  Abrir la sala en otra pestaña ↗
+                </Link>
+              </div>
+
+              <div className="live-monitor-viewers">
+                <span>Espectadores conectados</span>
+                {viewers.length ? (
+                  <ul>
+                    {viewers.map((viewer) => (
+                      <li key={viewer.viewerId}>
+                        <span className="live-monitor-viewer-avatar">
+                          {viewer.avatarUrl ? (
+                            <img alt="" src={viewer.avatarUrl} />
+                          ) : (
+                            (viewer.displayName || 'E').slice(0, 1).toUpperCase()
+                          )}
+                        </span>
+                        <span className="live-monitor-viewer-name">
+                          {viewer.displayName}
+                          {viewer.username ? <small>@{viewer.username}</small> : null}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="live-monitor-empty">Aún nadie se ha conectado. Comparte el enlace.</p>
+                )}
+              </div>
+            </details>
 
             {recordingStatus === 'grabando' ? (
               <p className="live-monitor-rec">

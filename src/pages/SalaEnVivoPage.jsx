@@ -3,30 +3,17 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import useLiveViewer from '../hooks/useLiveViewer'
 import { getLiveRoom, sendLiveChatMessage, sendLiveLikes } from '../services/liveApi'
+import { LIVE_CHAT_EMOJIS as EMOJIS, LIVE_CHAT_TEXT_MAX as CHAT_MAX_LENGTH, chatInitials as initialsOf } from '../components/live/liveChatEmojis'
 import './SalaEnVivo.css'
 
 const ROOM_POLL_MS = 2500
 const LIKE_FLUSH_MS = 850
-const CHAT_MAX_LENGTH = 280
-
-const EMOJIS = [
-  '❤️', '🔥', '👏', '😂', '😍', '😮', '😢', '😡', '🙌', '💪',
-  '🇻🇪', '✊', '🕊️', '⭐', '🎉', '👍', '👎', '🤝', '🙏', '💯',
-  '😅', '🥺', '😎', '🤔', '👀', '💥', '📣', '⚡', '🌟', '❓',
-]
 
 function formatCount(value) {
   const n = Math.max(0, Math.round(Number(value) || 0))
   if (n < 1000) return String(n)
   if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`.replace('.0k', 'k')
   return `${(n / 1_000_000).toFixed(1)}M`.replace('.0M', 'M')
-}
-
-function initialsOf(name) {
-  const text = String(name || '').trim()
-  if (!text) return 'VE'
-  const parts = text.split(/\s+/)
-  return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || 'VE'
 }
 
 export default function SalaEnVivoPage() {
@@ -318,7 +305,14 @@ export default function SalaEnVivoPage() {
             {shareHint ? <span className="sala-share-hint">{shareHint}</span> : null}
           </div>
 
-          {viewerError ? <p className="route-message sala-error">{viewerError}</p> : null}
+          {viewerError && !liveOver ? (
+            <p className="route-message sala-error">
+              {viewerError}{' '}
+              <button className="sala-retry" onClick={() => void join(sessionId)} type="button">
+                Reintentar
+              </button>
+            </p>
+          ) : null}
         </div>
 
         <aside className="sala-chat">
@@ -333,23 +327,30 @@ export default function SalaEnVivoPage() {
                 Sé el primero en escribir. Saluda a {ownerName} 👋
               </p>
             ) : (
-              messages.map((message) => (
-                <div
-                  className={`sala-msg ${message.userId === user?.id ? 'mine' : ''}`}
-                  key={message.id}
-                >
-                  <span className="sala-msg-avatar" aria-hidden="true">
-                    {message.avatarUrl ? (
-                      <img alt="" src={message.avatarUrl} />
-                    ) : (
-                      initialsOf(message.displayName)
-                    )}
-                  </span>
-                  <p>
-                    <b>{message.displayName}</b> {message.text}
-                  </p>
-                </div>
-              ))
+              messages.map((message) =>
+                message.kind === 'system' ? (
+                  <div className="sala-msg-system" key={message.id}>
+                    {message.event === 'follow' ? '➕ ' : '📣 '}
+                    {message.text}
+                  </div>
+                ) : (
+                  <div
+                    className={`sala-msg ${message.userId === user?.id ? 'mine' : ''}`}
+                    key={message.id}
+                  >
+                    <span className="sala-msg-avatar" aria-hidden="true">
+                      {message.avatarUrl ? (
+                        <img alt="" src={message.avatarUrl} />
+                      ) : (
+                        initialsOf(message.displayName)
+                      )}
+                    </span>
+                    <p>
+                      <b>{message.displayName}</b> {message.text}
+                    </p>
+                  </div>
+                ),
+              )
             )}
           </div>
 

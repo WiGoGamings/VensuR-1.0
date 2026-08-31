@@ -2,7 +2,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   createLiveSession,
+  getLiveRoom,
   getLiveSessionOffers,
+  sendLiveChatMessage,
   stopLiveSession,
   submitLiveViewerAnswer,
 } from '../services/liveApi'
@@ -10,6 +12,7 @@ import { uploadLiveRecording } from '../services/recordingsApi'
 
 const LIVE_STUN_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
 const OFFERS_POLL_INTERVAL_MS = 1100
+const CHAT_POLL_INTERVAL_MS = 2000
 const ICE_GATHERING_TIMEOUT_MS = 3500
 const RECORDING_MAX_BYTES = 150 * 1024 * 1024
 const RECORDING_MIME_CANDIDATES = [
@@ -62,16 +65,25 @@ export function LiveBroadcastProvider({ children }) {
   const streamRef = useRef(null)
   const peerByViewerIdRef = useRef(new Map())
   const pollingTimerRef = useRef(null)
+  const chatPollTimerRef = useRef(null)
+  const pollActiveRef = useRef(false)
   const processingOffersRef = useRef(new Set())
   const sessionIdRef = useRef('')
   const recorderRef = useRef(null)
   const recordedChunksRef = useRef([])
   const recordedBytesRef = useRef(0)
+  const lastChatSeqRef = useRef(0)
 
+  const [chatMessages, setChatMessages] = useState([])
+  const [chatError, setChatError] = useState('')
+  const [liveLikes, setLiveLikes] = useState(0)
   const [recordingStatus, setRecordingStatus] = useState('')
   const [stream, setStream] = useState(null)
   const [isCameraReady, setIsCameraReady] = useState(false)
   const [includeAudio, setIncludeAudio] = useState(true)
+  const [mediaInputs, setMediaInputs] = useState({ cameras: [], microphones: [] })
+  const [selectedCameraId, setSelectedCameraId] = useState('')
+  const [selectedMicId, setSelectedMicId] = useState('')
 
   const [isPreparing, setIsPreparing] = useState(false)
   const [isStarting, setIsStarting] = useState(false)
@@ -91,9 +103,14 @@ export function LiveBroadcastProvider({ children }) {
   const [isMonitorOpen, setIsMonitorOpen] = useState(false)
 
   const stopPollingInternal = useCallback(() => {
+    pollActiveRef.current = false
     if (pollingTimerRef.current) {
-      clearInterval(pollingTimerRef.current)
+      clearTimeout(pollingTimerRef.current)
       pollingTimerRef.current = null
+    }
+    if (chatPollTimerRef.current) {
+      clearTimeout(chatPollTimerRef.current)
+      chatPollTimerRef.current = null
     }
   }, [])
 
@@ -207,6 +224,7 @@ export function LiveBroadcastProvider({ children }) {
         recordedBytesRef.current = 0
         setRecordingStatus('')
       }
+      lastChatSeqRef.current = 0
       setIsLive(false)
       setIsPreparing(false)
       setIsStarting(false)
@@ -215,15 +233,36 @@ export function LiveBroadcastProvider({ children }) {
       setViewerCount(0)
       setViewers([])
       setStartedAt(0)
+      setChatMessages([])
+      setChatError('')
+      setLiveLikes(0)
       setSharePath('/vivo')
       setStatus(statusMessage || '')
     },
     [closePeersInternal, stopPollingInternal, stopStreamInternal],
   )
 
+  const refreshDeviceList = useCallback(async () => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) return
+    try {
+      const list = await navigator.mediaDevices.enumerateDevices()
+      const cameras = list
+        .filter((d) => d.kind === 'videoinput')
+        .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Cámara ${i + 1}` }))
+      const microphones = list
+        .filter((d) => d.kind === 'audioinput')
+        .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Micrófono ${i + 1}` }))
+      setMediaInputs({ cameras, microphones })
+    } catch {
+      // no-op: la lista de dispositivos es opcional
+    }
+  }, [])
+
   const prepareCamera = useCallback(
     async (options = {}) => {
       const wantsAudio = options.includeAudio ?? includeAudio
+      const cameraId = options.cameraId ?? selectedCameraId
+      const micId = options.micId ?? selectedMicId
       setIncludeAudio(wantsAudio)
       setError('')
 
@@ -240,24 +279,41 @@ export function LiveBroadcastProvider({ children }) {
           streamRef.current.getTracks().forEach((track) => track.stop())
         }
 
+        const videoConstraints = cameraId
+          ? { deviceId: { exact: cameraId } }
+          : { facingMode: { ideal: 'user' } }
+        const audioConstraints = wantsAudio
+          ? micId
+            ? { deviceId: { exact: micId } }
+            : true
+          : false
+
         const nextStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'user' } },
-          audio: wantsAudio,
+          video: videoConstraints,
+          audio: audioConstraints,
         })
 
         streamRef.current = nextStream
         setStream(nextStream)
         setIsCameraReady(true)
-        setStatus('Cámara lista. Pulsa "Iniciar en vivo".')
+
+        // Ahora que hay permiso, los labels de los dispositivos ya están disponibles.
+        const activeCam = nextStream.getVideoTracks()[0]?.getSettings?.().deviceId
+        const activeMic = nextStream.getAudioTracks()[0]?.getSettings?.().deviceId
+        if (activeCam) setSelectedCameraId(activeCam)
+        if (activeMic) setSelectedMicId(activeMic)
+        void refreshDeviceList()
+
+        setStatus('Cámara y micrófono listos. Pulsa "Iniciar en vivo".')
         return nextStream
       } catch (cameraError) {
         const byName = {
           NotAllowedError: 'Permiso denegado. Debes permitir cámara y micrófono.',
           NotFoundError: 'No se detectó cámara o micrófono.',
-          NotReadableError: 'La cámara está en uso por otra aplicación.',
+          NotReadableError: 'La cámara o el micrófono están en uso por otra aplicación.',
         }
         const name = cameraError && typeof cameraError === 'object' ? cameraError.name : ''
-        setError(byName[name] || 'No se pudo iniciar la cámara.')
+        setError(byName[name] || 'No se pudo iniciar la cámara o el micrófono.')
         setStatus('')
         stopStreamInternal()
         return null
@@ -265,7 +321,7 @@ export function LiveBroadcastProvider({ children }) {
         setIsPreparing(false)
       }
     },
-    [includeAudio, stopStreamInternal],
+    [includeAudio, refreshDeviceList, selectedCameraId, selectedMicId, stopStreamInternal],
   )
 
   const handleIncomingOffer = useCallback(async (activeSessionId, item) => {
@@ -293,8 +349,12 @@ export function LiveBroadcastProvider({ children }) {
       peer = new RTCPeerConnection(LIVE_STUN_CONFIG)
       localStream.getTracks().forEach((track) => peer.addTrack(track, localStream))
 
-      peer.onconnectionstatechange = () => {
-        if (!['failed', 'disconnected', 'closed'].includes(peer.connectionState)) return
+      let dropTimer = null
+      const dropViewer = () => {
+        if (dropTimer) {
+          clearTimeout(dropTimer)
+          dropTimer = null
+        }
         if (peerByViewerIdRef.current.get(viewerId) === peer) {
           peerByViewerIdRef.current.delete(viewerId)
           setViewers((current) => current.filter((v) => v.viewerId !== viewerId))
@@ -303,6 +363,25 @@ export function LiveBroadcastProvider({ children }) {
           peer.close()
         } catch {
           // no-op
+        }
+      }
+
+      peer.onconnectionstatechange = () => {
+        const state = peer.connectionState
+        // 'disconnected' suele recuperarse solo: damos margen antes de cerrar.
+        if (state === 'connected') {
+          if (dropTimer) {
+            clearTimeout(dropTimer)
+            dropTimer = null
+          }
+          return
+        }
+        if (state === 'disconnected') {
+          if (!dropTimer) dropTimer = setTimeout(dropViewer, 15_000)
+          return
+        }
+        if (state === 'failed' || state === 'closed') {
+          dropViewer()
         }
       }
 
@@ -354,8 +433,10 @@ export function LiveBroadcastProvider({ children }) {
   const startPolling = useCallback(
     (activeSessionId) => {
       stopPollingInternal()
+      pollActiveRef.current = true
 
-      const poll = async () => {
+      // --- Señalización de espectadores: temporizador encadenado (nunca solapa) ---
+      const pollOffers = async () => {
         try {
           const payload = await getLiveSessionOffers(activeSessionId)
           const count = Number(payload?.viewerCount ?? 0)
@@ -372,13 +453,46 @@ export function LiveBroadcastProvider({ children }) {
           setError(message)
           if (message.toLowerCase().includes('ya no esta activa') || message.toLowerCase().includes('finaliz')) {
             teardown('La transmisión finalizó.')
+            return
           }
+        }
+        if (pollActiveRef.current) {
+          pollingTimerRef.current = setTimeout(() => void pollOffers(), OFFERS_POLL_INTERVAL_MS)
+        }
+      }
+
+      // --- Chat + likes: temporizador propio y más lento, aislado de la señalización ---
+      const pollChat = async () => {
+        try {
+          const room = await getLiveRoom(activeSessionId, lastChatSeqRef.current)
+          const incoming = Array.isArray(room?.chat) ? room.chat : []
+          if (incoming.length) {
+            lastChatSeqRef.current = Math.max(
+              lastChatSeqRef.current,
+              ...incoming.map((m) => Number(m.seq) || 0),
+            )
+            setChatMessages((current) => {
+              const seen = new Set(current.map((m) => m.id))
+              const fresh = incoming.filter((m) => !seen.has(m.id))
+              return fresh.length ? [...current, ...fresh].slice(-200) : current
+            })
+          } else if (Number.isFinite(Number(room?.latestSeq))) {
+            lastChatSeqRef.current = Math.max(lastChatSeqRef.current, Number(room.latestSeq))
+          }
+          if (Number.isFinite(Number(room?.likes))) {
+            setLiveLikes((current) => Math.max(current, Number(room.likes)))
+          }
+        } catch {
+          // el chat es secundario
+        }
+        if (pollActiveRef.current) {
+          chatPollTimerRef.current = setTimeout(() => void pollChat(), CHAT_POLL_INTERVAL_MS)
         }
       }
 
       liveLog('polling de ofertas iniciado para', activeSessionId)
-      void poll()
-      pollingTimerRef.current = setInterval(() => void poll(), OFFERS_POLL_INTERVAL_MS)
+      void pollOffers()
+      void pollChat()
     },
     [handleIncomingOffer, stopPollingInternal, teardown],
   )
@@ -481,6 +595,27 @@ export function LiveBroadcastProvider({ children }) {
     }
   }, [finalizeRecording, isStopping, meta.title, startedAt, teardown])
 
+  const sendChatMessage = useCallback(async (text) => {
+    const id = sessionIdRef.current
+    const clean = (text || '').trim()
+    if (!id || !clean) return
+
+    try {
+      const payload = await sendLiveChatMessage(id, clean)
+      if (payload?.message) {
+        lastChatSeqRef.current = Math.max(lastChatSeqRef.current, Number(payload.message.seq) || 0)
+        setChatMessages((current) =>
+          current.some((m) => m.id === payload.message.id)
+            ? current
+            : [...current, payload.message].slice(-200),
+        )
+      }
+      setChatError('')
+    } catch (sendError) {
+      setChatError(sendError instanceof Error ? sendError.message : 'No se pudo enviar el mensaje.')
+    }
+  }, [])
+
   const clearError = useCallback(() => setError(''), [])
   const openStudio = useCallback(() => {
     setError('')
@@ -507,7 +642,9 @@ export function LiveBroadcastProvider({ children }) {
     return () => {
       const id = sessionIdRef.current
       if (id) void stopLiveSession(id).catch(() => {})
-      if (pollingTimerRef.current) clearInterval(pollingTimerRef.current)
+      pollActiveRef.current = false
+      if (pollingTimerRef.current) clearTimeout(pollingTimerRef.current)
+      if (chatPollTimerRef.current) clearTimeout(chatPollTimerRef.current)
       streamRef.current?.getTracks().forEach((track) => track.stop())
       for (const peer of peers.values()) {
         try {
@@ -526,6 +663,9 @@ export function LiveBroadcastProvider({ children }) {
       stream,
       isCameraReady,
       includeAudio,
+      mediaInputs,
+      selectedCameraId,
+      selectedMicId,
       isPreparing,
       isStarting,
       isLive,
@@ -539,13 +679,20 @@ export function LiveBroadcastProvider({ children }) {
       status,
       error,
       recordingStatus,
+      chatMessages,
+      chatError,
+      liveLikes,
       isStudioOpen,
       isMonitorOpen,
       // acciones
       setIncludeAudio,
+      setSelectedCameraId,
+      setSelectedMicId,
+      refreshDeviceList,
       prepareCamera,
       startBroadcast,
       stopBroadcast,
+      sendChatMessage,
       openStudio,
       closeStudio,
       openMonitor,
@@ -553,10 +700,12 @@ export function LiveBroadcastProvider({ children }) {
       clearError,
     }),
     [
-      stream, isCameraReady, includeAudio, isPreparing, isStarting, isLive, isStopping,
+      stream, isCameraReady, includeAudio, mediaInputs, selectedCameraId, selectedMicId,
+      isPreparing, isStarting, isLive, isStopping,
       sessionId, sharePath, meta, viewerCount, viewers, startedAt, status, error, recordingStatus,
-      isStudioOpen, isMonitorOpen, prepareCamera, startBroadcast, stopBroadcast,
-      openStudio, closeStudio, openMonitor, closeMonitor, clearError,
+      chatMessages, chatError, liveLikes,
+      isStudioOpen, isMonitorOpen, refreshDeviceList, prepareCamera, startBroadcast, stopBroadcast,
+      sendChatMessage, openStudio, closeStudio, openMonitor, closeMonitor, clearError,
     ],
   )
 

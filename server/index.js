@@ -466,9 +466,12 @@ const BOT_ACTIVITY_PRESETS = {
   },
 }
 
-const LIVE_STREAM_MAX_DURATION_MS = 4 * 60 * 60 * 1000
+// Sin límite práctico de duración: solo una red de seguridad enorme (7 días)
+// para que una sesión olvidada no quede "activa" para siempre.
+const LIVE_STREAM_MAX_DURATION_MS = 7 * 24 * 60 * 60 * 1000
 const LIVE_STREAM_PENDING_OFFER_TTL_MS = 90_000
-const LIVE_STREAM_IDLE_VIEWER_TTL_MS = 12 * 60 * 1000
+// Un espectador conectado sigue "vivo" mientras su cliente dé señales de vida.
+const LIVE_STREAM_IDLE_VIEWER_TTL_MS = 45 * 60 * 1000
 const LIVE_RECORDING_TTL_HOURS = Number.parseInt(process.env.LIVE_RECORDING_TTL_HOURS ?? '72', 10) || 72
 const LIVE_RECORDING_MAX_BYTES = Number.parseInt(process.env.LIVE_RECORDING_MAX_BYTES ?? '', 10) || 180 * 1024 * 1024
 const LIVE_RECORDING_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
@@ -2885,6 +2888,16 @@ const LIVE_CHAT_MAX_MESSAGES = 220
 const LIVE_CHAT_TEXT_MAX = 280
 const LIVE_LIKES_PER_REQUEST_MAX = 30
 
+function pushLiveChatEntry(runtime, entry) {
+  runtime.chatSeq += 1
+  const message = { id: `${Date.now().toString(36)}-${runtime.chatSeq}`, seq: runtime.chatSeq, createdAt: nowIso(), ...entry }
+  runtime.chat.push(message)
+  if (runtime.chat.length > LIVE_CHAT_MAX_MESSAGES) {
+    runtime.chat.splice(0, runtime.chat.length - LIVE_CHAT_MAX_MESSAGES)
+  }
+  return message
+}
+
 function appendLiveChatMessage(sessionId, author, rawText) {
   const runtime = ensureLiveRuntimeSession(sessionId)
   if (!runtime) return null
@@ -2892,24 +2905,35 @@ function appendLiveChatMessage(sessionId, author, rawText) {
   const text = safeString(rawText).replace(/\s+/g, ' ').trim().slice(0, LIVE_CHAT_TEXT_MAX)
   if (!text) return null
 
-  runtime.chatSeq += 1
-  const message = {
-    id: `${Date.now().toString(36)}-${runtime.chatSeq}`,
-    seq: runtime.chatSeq,
+  return pushLiveChatEntry(runtime, {
+    kind: 'user',
     userId: author?.id || '',
     username: author?.username || '',
     displayName: author?.display_name || author?.username || 'Ciudadano VensuR',
     avatarUrl: author?.avatar_url || '',
     text,
-    createdAt: nowIso(),
-  }
+  })
+}
 
-  runtime.chat.push(message)
-  if (runtime.chat.length > LIVE_CHAT_MAX_MESSAGES) {
-    runtime.chat.splice(0, runtime.chat.length - LIVE_CHAT_MAX_MESSAGES)
-  }
+// Aviso de sistema en el chat del directo (nuevo seguidor, etc.).
+function appendLiveSystemMessage(sessionId, text, event = 'info') {
+  const key = safeString(sessionId)
+  if (!key) return null
+  const runtime = liveRuntime.sessions.get(key)
+  if (!runtime) return null
+  const clean = safeString(text).replace(/\s+/g, ' ').trim().slice(0, LIVE_CHAT_TEXT_MAX)
+  if (!clean) return null
+  return pushLiveChatEntry(runtime, { kind: 'system', event, text: clean })
+}
 
-  return message
+// Si el usuario está transmitiendo ahora, avisa en su chat que alguien lo siguió.
+function notifyLiveFollow(targetUserId, follower) {
+  const session = selectActiveLiveSessionByOwnerStmt.get(targetUserId)
+  if (!session?.id) return
+  if (isLiveSessionExpired(session)) return
+  const name = follower?.display_name || follower?.username || 'Alguien'
+  const handle = follower?.username ? ` (@${follower.username})` : ''
+  appendLiveSystemMessage(session.id, `${name}${handle} empezó a seguirte`, 'follow')
 }
 
 function addLiveLikes(sessionId, rawCount) {
@@ -4242,6 +4266,7 @@ app.post('/api/content/users/:username/follow', requireAuth, (req, res) => {
   if (!wasFollowing) {
     const now = nowIso()
     insertFollowRelationStmt.run(nanoid(), req.authUser.id, target.id, now, now)
+    notifyLiveFollow(target.id, req.authUser)
   }
 
   res.status(wasFollowing ? 200 : 201).json({
