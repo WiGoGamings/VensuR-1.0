@@ -52,19 +52,20 @@ export default function SalaEnVivoPage() {
   const chatScrollRef = useRef(null)
 
   const shareUrl = typeof window !== 'undefined' ? window.location.href : ''
+  const liveOver = ended || room?.status === 'ended'
 
   // Conectar al directo al entrar.
   useEffect(() => {
-    if (!sessionId || !isAuthenticated) return undefined
+    if (!sessionId || !isAuthenticated || liveOver) return undefined
     void join(sessionId)
     return () => {
       void leave({ notifyServer: true })
     }
-  }, [sessionId, isAuthenticated, join, leave])
+  }, [sessionId, isAuthenticated, join, leave, liveOver])
 
   // Sondeo de la sala: chat + likes + espectadores.
   useEffect(() => {
-    if (!sessionId || !isAuthenticated) return undefined
+    if (!sessionId || !isAuthenticated || liveOver) return undefined
     let active = true
 
     const poll = async () => {
@@ -95,8 +96,19 @@ export default function SalaEnVivoPage() {
         }
       } catch (pollError) {
         if (!active) return
+        const statusCode = Number(pollError?.status || 0)
+        if (statusCode === 404 || statusCode === 410) {
+          setEnded(true)
+          setRoom((current) => (current ? { ...current, status: 'ended' } : current))
+          setRoomError('')
+          return
+        }
+
+        const message = pollError instanceof Error ? pollError.message : 'No se pudo cargar la sala en vivo.'
         setRoomError(
-          pollError instanceof Error ? pollError.message : 'No se pudo cargar la sala en vivo.',
+          /failed to fetch/i.test(message)
+            ? 'No se pudo conectar con el servidor de en vivo.'
+            : message,
         )
       }
     }
@@ -107,7 +119,12 @@ export default function SalaEnVivoPage() {
       active = false
       clearInterval(timerId)
     }
-  }, [sessionId, isAuthenticated, setEnded, setViewerCount])
+  }, [sessionId, isAuthenticated, liveOver, setEnded, setViewerCount])
+
+  useEffect(() => {
+    if (!liveOver) return
+    void leave({ notifyServer: false })
+  }, [liveOver, leave])
 
   // Autoscroll del chat.
   useEffect(() => {
@@ -203,7 +220,6 @@ export default function SalaEnVivoPage() {
   }
 
   const ownerName = room?.ownerDisplayName || room?.ownerUsername || 'Transmisión'
-  const liveOver = ended || room?.status === 'ended'
 
   const headerRight = useMemo(
     () => (
@@ -354,7 +370,7 @@ export default function SalaEnVivoPage() {
             )}
           </div>
 
-          {roomError ? <p className="sala-chat-error">{roomError}</p> : null}
+          {roomError && !liveOver ? <p className="sala-chat-error">{roomError}</p> : null}
 
           {showEmojis ? (
             <div className="sala-emojis">

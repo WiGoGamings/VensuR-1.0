@@ -1,12 +1,19 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import {
+  disableMfa as disableMfaApi,
+  enableMfa as enableMfaApi,
+  exchangeLegacySession,
   getCurrentUser,
+  getMfaStatus,
   loginUser,
   loginWithApple,
   loginWithGoogle,
+  logoutUser,
   resendVerification,
   registerUser,
+  startMfaSetup,
+  verifyMfaLogin,
   verifyEmail,
   updateCurrentUser,
   updateCurrentUserAvatar,
@@ -110,17 +117,23 @@ export function AuthProvider({ children }) {
   const [isBusy, setIsBusy] = useState(false)
   const [authError, setAuthError] = useState('')
   const [verificationChallenge, setVerificationChallenge] = useState(null)
+  const [mfaLoginChallenge, setMfaLoginChallenge] = useState(null)
 
-  const applySession = useCallback((token, nextUser) => {
-    setAuthToken(token)
-    writeStoredToken(token)
+  const applySession = useCallback((nextUser) => {
+    // Desde esta migracion, la sesion persistente vive en cookies HttpOnly.
+    setAuthToken('')
+    writeStoredToken('')
     setUser(nextUser)
+    setVerificationChallenge(null)
+    setMfaLoginChallenge(null)
   }, [])
 
   const clearSession = useCallback(() => {
     setAuthToken('')
     writeStoredToken('')
     setUser(null)
+    setVerificationChallenge(null)
+    setMfaLoginChallenge(null)
   }, [])
 
   const saveVerificationChallenge = useCallback((payload) => {
@@ -135,23 +148,43 @@ export function AuthProvider({ children }) {
     })
   }, [])
 
+  const saveMfaLoginChallenge = useCallback((payload) => {
+    const mfaToken = typeof payload?.mfaToken === 'string' ? payload.mfaToken : ''
+    if (!mfaToken) return
+
+    const expiresInSecRaw = Number(payload?.mfaExpiresInSec)
+
+    setMfaLoginChallenge({
+      mfaToken,
+      method: typeof payload?.mfaMethod === 'string' ? payload.mfaMethod : 'totp',
+      hint: typeof payload?.mfaHint === 'string' ? payload.mfaHint : '',
+      expiresInSec: Number.isFinite(expiresInSecRaw) ? Math.max(60, expiresInSecRaw) : 300,
+    })
+  }, [])
+
   useEffect(() => {
     let isMounted = true
 
     async function bootstrapAuth() {
-      const token = readStoredToken()
-      if (!token) {
-        if (isMounted) setIsBooting(false)
-        return
-      }
-
-      setAuthToken(token)
+      const legacyToken = readStoredToken()
+      setAuthToken(legacyToken)
 
       try {
         const response = await getCurrentUser()
         if (!isMounted) return
 
         setUser(response.user)
+
+        if (legacyToken) {
+          try {
+            await exchangeLegacySession()
+            if (!isMounted) return
+            setAuthToken('')
+            writeStoredToken('')
+          } catch {
+            // Si el exchange falla, mantenemos compatibilidad en memoria con el token legado.
+          }
+        }
       } catch {
         if (!isMounted) return
         clearSession()
@@ -176,6 +209,7 @@ export function AuthProvider({ children }) {
         const response = await registerUser(payload)
 
         if (response?.requiresEmailVerification) {
+          setMfaLoginChallenge(null)
           saveVerificationChallenge({
             email: response.email || payload.email,
             verificationSent: response.verificationSent,
@@ -184,8 +218,9 @@ export function AuthProvider({ children }) {
           return null
         }
 
-        applySession(response.token, response.user)
+        applySession(response.user)
         setVerificationChallenge(null)
+  setMfaLoginChallenge(null)
         return response.user
       } catch (error) {
         setAuthError(error instanceof Error ? error.message : 'No se pudo crear la cuenta')
@@ -204,19 +239,22 @@ export function AuthProvider({ children }) {
 
       try {
         const response = await loginUser(payload)
-        applySession(response.token, response.user)
+        applySession(response.user)
         setVerificationChallenge(null)
+        setMfaLoginChallenge(null)
         return response.user
       } catch (error) {
-        const verificationErrorCode =
-          error && typeof error === 'object' ? error.errorCode : ''
+        const authErrorCode = error && typeof error === 'object' ? error.errorCode : ''
 
-        if (verificationErrorCode === 'EMAIL_NOT_VERIFIED') {
+        if (authErrorCode === 'EMAIL_NOT_VERIFIED') {
           saveVerificationChallenge({
             email: error.email || payload.identifier,
             verificationSent: error.verificationSent,
             debugVerificationCode: error.debugVerificationCode,
           })
+        } else if (authErrorCode === 'MFA_REQUIRED') {
+          setVerificationChallenge(null)
+          saveMfaLoginChallenge(error)
         }
 
         setAuthError(error instanceof Error ? error.message : 'No se pudo iniciar sesion')
@@ -225,7 +263,7 @@ export function AuthProvider({ children }) {
         setIsBusy(false)
       }
     },
-    [applySession, saveVerificationChallenge],
+    [applySession, saveVerificationChallenge, saveMfaLoginChallenge],
   )
 
   const socialGoogleLogin = useCallback(
@@ -235,16 +273,23 @@ export function AuthProvider({ children }) {
 
       try {
         const response = await loginWithGoogle({ idToken })
-        applySession(response.token, response.user)
+        applySession(response.user)
+        setVerificationChallenge(null)
+        setMfaLoginChallenge(null)
         return response.user
       } catch (error) {
+        const authErrorCode = error && typeof error === 'object' ? error.errorCode : ''
+        if (authErrorCode === 'MFA_REQUIRED') {
+          setVerificationChallenge(null)
+          saveMfaLoginChallenge(error)
+        }
         setAuthError(error instanceof Error ? error.message : 'No se pudo iniciar sesion con Google')
         return null
       } finally {
         setIsBusy(false)
       }
     },
-    [applySession],
+    [applySession, saveMfaLoginChallenge],
   )
 
   const socialAppleLogin = useCallback(
@@ -254,22 +299,30 @@ export function AuthProvider({ children }) {
 
       try {
         const response = await loginWithApple({ idToken, firstName, lastName })
-        applySession(response.token, response.user)
+        applySession(response.user)
+        setVerificationChallenge(null)
+        setMfaLoginChallenge(null)
         return response.user
       } catch (error) {
+        const authErrorCode = error && typeof error === 'object' ? error.errorCode : ''
+        if (authErrorCode === 'MFA_REQUIRED') {
+          setVerificationChallenge(null)
+          saveMfaLoginChallenge(error)
+        }
         setAuthError(error instanceof Error ? error.message : 'No se pudo iniciar sesion con Apple')
         return null
       } finally {
         setIsBusy(false)
       }
     },
-    [applySession],
+    [applySession, saveMfaLoginChallenge],
   )
 
   const logout = useCallback(async () => {
     setIsBusy(true)
     setAuthError('')
     setVerificationChallenge(null)
+    setMfaLoginChallenge(null)
 
     try {
       if (user?.id) {
@@ -292,6 +345,12 @@ export function AuthProvider({ children }) {
         }
       }
 
+      try {
+        await logoutUser()
+      } catch {
+        // Logout best-effort: siempre limpiamos la sesion local del cliente.
+      }
+
       clearSession()
       return true
     } finally {
@@ -306,17 +365,23 @@ export function AuthProvider({ children }) {
 
       try {
         const response = await verifyEmail({ email, code })
-        applySession(response.token, response.user)
+        applySession(response.user)
         setVerificationChallenge(null)
+        setMfaLoginChallenge(null)
         return response.user
       } catch (error) {
+        const authErrorCode = error && typeof error === 'object' ? error.errorCode : ''
+        if (authErrorCode === 'MFA_REQUIRED') {
+          setVerificationChallenge(null)
+          saveMfaLoginChallenge(error)
+        }
         setAuthError(error instanceof Error ? error.message : 'No se pudo verificar el correo')
         return null
       } finally {
         setIsBusy(false)
       }
     },
-    [applySession],
+    [applySession, saveMfaLoginChallenge],
   )
 
   const resendVerificationCode = useCallback(
@@ -344,8 +409,97 @@ export function AuthProvider({ children }) {
     [saveVerificationChallenge],
   )
 
+  const verifyMfaLoginCode = useCallback(
+    async ({ mfaToken, code }) => {
+      setIsBusy(true)
+      setAuthError('')
+
+      try {
+        const response = await verifyMfaLogin({ mfaToken, code })
+        applySession(response.user)
+        setMfaLoginChallenge(null)
+        setVerificationChallenge(null)
+        return response.user
+      } catch (error) {
+        const authErrorCode = error && typeof error === 'object' ? error.errorCode : ''
+        if (authErrorCode === 'MFA_CHALLENGE_INVALID' || authErrorCode === 'MFA_TOO_MANY_ATTEMPTS') {
+          setMfaLoginChallenge(null)
+        }
+        setAuthError(error instanceof Error ? error.message : 'No se pudo validar MFA')
+        return null
+      } finally {
+        setIsBusy(false)
+      }
+    },
+    [applySession],
+  )
+
+  const requestMfaSetup = useCallback(async () => {
+    setIsBusy(true)
+    setAuthError('')
+
+    try {
+      return await startMfaSetup()
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'No se pudo iniciar la configuracion MFA')
+      return null
+    } finally {
+      setIsBusy(false)
+    }
+  }, [])
+
+  const enableMfaForCurrentUser = useCallback(
+    async ({ setupToken, code }) => {
+      setIsBusy(true)
+      setAuthError('')
+
+      try {
+        const response = await enableMfaApi({ setupToken, code })
+        applySession(response.user)
+        return response.user
+      } catch (error) {
+        setAuthError(error instanceof Error ? error.message : 'No se pudo activar MFA')
+        return null
+      } finally {
+        setIsBusy(false)
+      }
+    },
+    [applySession],
+  )
+
+  const disableMfaForCurrentUser = useCallback(
+    async ({ code }) => {
+      setIsBusy(true)
+      setAuthError('')
+
+      try {
+        const response = await disableMfaApi({ code })
+        applySession(response.user)
+        return response.user
+      } catch (error) {
+        setAuthError(error instanceof Error ? error.message : 'No se pudo desactivar MFA')
+        return null
+      } finally {
+        setIsBusy(false)
+      }
+    },
+    [applySession],
+  )
+
+  const refreshMfaStatus = useCallback(async () => {
+    try {
+      return await getMfaStatus()
+    } catch {
+      return null
+    }
+  }, [])
+
   const clearVerificationChallenge = useCallback(() => {
     setVerificationChallenge(null)
+  }, [])
+
+  const clearMfaLoginChallenge = useCallback(() => {
+    setMfaLoginChallenge(null)
   }, [])
 
   const refreshUser = useCallback(async () => {
@@ -422,13 +576,20 @@ export function AuthProvider({ children }) {
       isAuthBusy: isBusy,
       authError,
       verificationChallenge,
+      mfaLoginChallenge,
       register,
       login,
       loginWithGoogle: socialGoogleLogin,
       loginWithApple: socialAppleLogin,
       verifyEmailCode,
+      verifyMfaLoginCode,
       resendVerificationCode,
+      requestMfaSetup,
+      enableMfaForCurrentUser,
+      disableMfaForCurrentUser,
+      refreshMfaStatus,
       clearVerificationChallenge,
+      clearMfaLoginChallenge,
       logout,
       refreshUser,
       updateProfile,
@@ -442,13 +603,20 @@ export function AuthProvider({ children }) {
       isBusy,
       authError,
       verificationChallenge,
+      mfaLoginChallenge,
       register,
       login,
       socialGoogleLogin,
       socialAppleLogin,
       verifyEmailCode,
+      verifyMfaLoginCode,
       resendVerificationCode,
+      requestMfaSetup,
+      enableMfaForCurrentUser,
+      disableMfaForCurrentUser,
+      refreshMfaStatus,
       clearVerificationChallenge,
+      clearMfaLoginChallenge,
       logout,
       refreshUser,
       updateProfile,

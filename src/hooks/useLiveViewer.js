@@ -158,6 +158,14 @@ export default function useLiveViewer() {
           payload = await getLiveViewerAnswer(sessionId, viewerId)
         } catch (pollError) {
           if (gen !== genRef.current) return
+          const statusCode = Number(pollError?.status || 0)
+          if (statusCode === 404 || statusCode === 410) {
+            streamEndedRef.current = true
+            setEnded(true)
+            setError('La transmisión terminó.')
+            await leave({ notifyServer: false })
+            return
+          }
           if (phase === 'waiting') {
             setError(pollError instanceof Error ? pollError.message : 'No se pudo conectar al en vivo.')
           }
@@ -320,6 +328,13 @@ export default function useLiveViewer() {
         startAnswerPolling(gen, session.id, viewerId, peerConnection)
       } catch (joinError) {
         if (!isCurrent()) return
+        const statusCode = Number(joinError?.status || 0)
+        if (statusCode === 404 || statusCode === 410) {
+          streamEndedRef.current = true
+          setEnded(true)
+          setError('La transmisión terminó.')
+          return
+        }
         if (isReconnect) {
           setStatus('Reintentando conexión…')
           disconnectTimerRef.current = setTimeout(

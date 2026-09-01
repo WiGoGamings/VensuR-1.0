@@ -26,6 +26,16 @@ export function loginUser(payload) {
 }
 
 /**
+ * @param {{ mfaToken: string, code: string }} payload
+ */
+export function verifyMfaLogin(payload) {
+  return httpRequest('/api/auth/mfa/verify-login', {
+    method: 'POST',
+    body: payload,
+  })
+}
+
+/**
  * @param {{ email: string, code: string }} payload
  */
 export function verifyEmail(payload) {
@@ -71,6 +81,64 @@ export function getAuthProviders() {
 
 export function getCurrentUser() {
   return httpRequest('/api/auth/me')
+}
+
+export function getMfaStatus() {
+  return httpRequest('/api/auth/mfa/status')
+}
+
+export function startMfaSetup() {
+  return httpRequest('/api/auth/mfa/setup', {
+    method: 'POST',
+  })
+}
+
+/**
+ * @param {{ setupToken: string, code: string }} payload
+ */
+export function enableMfa(payload) {
+  return httpRequest('/api/auth/mfa/enable', {
+    method: 'POST',
+    body: payload,
+  })
+}
+
+/**
+ * @param {{ code: string }} payload
+ */
+export function disableMfa(payload) {
+  return httpRequest('/api/auth/mfa/disable', {
+    method: 'POST',
+    body: payload,
+  })
+}
+
+/**
+ * @param {{ limit?: number, days?: number, severity?: string, eventType?: string, identifier?: string }} [params]
+ */
+export function getSecurityAuditEvents(params = {}) {
+  const query = new URLSearchParams()
+
+  if (params.limit != null) query.set('limit', String(params.limit))
+  if (params.days != null) query.set('days', String(params.days))
+  if (params.severity) query.set('severity', String(params.severity))
+  if (params.eventType) query.set('eventType', String(params.eventType))
+  if (params.identifier) query.set('identifier', String(params.identifier))
+
+  const suffix = query.toString()
+  return httpRequest(`/api/security/audit-events${suffix ? `?${suffix}` : ''}`)
+}
+
+export function exchangeLegacySession() {
+  return httpRequest('/api/auth/session/exchange', {
+    method: 'POST',
+  })
+}
+
+export function logoutUser() {
+  return httpRequest('/api/auth/logout', {
+    method: 'POST',
+  })
 }
 
 /**

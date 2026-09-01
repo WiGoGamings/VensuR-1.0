@@ -6,11 +6,15 @@ services:
   - type: web
     name: vensur-api
     runtime: node
-    plan: free
+    plan: 0.5c-512mb
     buildCommand: npm ci
     startCommand: npm run start:api
     healthCheckPath: /api/health
     autoDeploy: true
+    disk:
+      name: vensur-data
+      mountPath: /var/data
+      sizeGB: 5
     envVars:
       - key: NODE_ENV
         value: production
@@ -25,27 +29,92 @@ services:
       - key: TRUST_PROXY
         value: "1"
 
+      # Persistencia obligatoria para SQLite y uploads.
+      - key: DB_PATH
+        value: /var/data/vensur.db
+      - key: UPLOADS_DIR
+        value: /var/data/uploads
+      - key: REQUIRE_PERSISTENT_STORAGE
+        value: "true"
+
+      # Robustez de escritura SQLite en produccion.
+      - key: DB_BUSY_TIMEOUT_MS
+        value: "7000"
+      - key: DB_SYNCHRONOUS
+        value: FULL
+
+      # Endurecimiento de autenticacion.
+      - key: AUTH_PASSWORD_HASH_ROUNDS
+        value: "12"
+      - key: AUTH_ACCESS_TOKEN_EXPIRES_IN
+        value: 15m
+      - key: AUTH_REFRESH_TOKEN_TTL_DAYS
+        value: "14"
+      - key: AUTH_COOKIE_SAME_SITE
+        value: lax
+      - key: AUTH_COOKIE_SECURE
+        value: "true"
+      - key: AUTH_ALLOW_BEARER_TOKENS
+        value: "false"
+      - key: AUTH_EXPOSE_TOKEN_RESPONSE
+        value: "false"
+      - key: REQUIRE_STRICT_CORS
+        value: "true"
+      - key: AUTH_LOGIN_FAIL_WINDOW_MS
+        value: "1800000"
+      - key: AUTH_LOGIN_LOCK_L1_AFTER
+        value: "5"
+      - key: AUTH_LOGIN_LOCK_L1_MS
+        value: "120000"
+      - key: AUTH_LOGIN_LOCK_L2_AFTER
+        value: "8"
+      - key: AUTH_LOGIN_LOCK_L2_MS
+        value: "600000"
+      - key: AUTH_LOGIN_LOCK_L3_AFTER
+        value: "12"
+      - key: AUTH_LOGIN_LOCK_L3_MS
+        value: "1800000"
+      - key: SECURITY_EVENT_RETENTION_DAYS
+        value: "30"
+      - key: AUTH_MFA_SECRET_ENCRYPTION_KEY
+        generateValue: true
+      - key: AUTH_MFA_SETUP_TOKEN_EXPIRES_IN
+        value: 10m
+      - key: AUTH_MFA_LOGIN_CHALLENGE_TTL_MS
+        value: "300000"
+      - key: AUTH_MFA_LOGIN_MAX_ATTEMPTS
+        value: "6"
+      - key: AUTH_MFA_TOTP_ISSUER
+        value: VensuR
+      - key: SECURITY_AUDIT_ADMIN_ALLOWLIST
+        sync: false
+
+      # Redis (opcional) para rate limiting distribuido y lock anti brute force.
+      - key: AUTH_REDIS_ENABLED
+        value: "false"
+      - key: AUTH_REDIS_URL
+        sync: false
+
       # Orígenes permitidos por CORS. PON AQUÍ la URL de tu sitio en Netlify
       # (ej: https://vensur.netlify.app). Si usas el reenvío de netlify.toml
       # igual conviene ponerla. Varias separadas por comas.
       - key: ALLOWED_ORIGINS
         sync: false
 
-      # --- Despliegue de PRUEBA sin proveedor de correo ---
-      # Expone el código de verificación en la respuesta del registro para
-      # poder crear cuentas sin SMTP. ⚠️ NO dejar activo en producción real.
+      # Nunca exponer codigos de verificacion en produccion.
       - key: AUTH_EXPOSE_VERIFICATION_CODE
-        value: "true"
+        value: "false"
       - key: MAIL_TRANSPORT
         value: console
 
       # --- Contenido de demo (bots) ---
+      # Para un entorno productivo estable se recomienda dejarlos en false.
       - key: BOTS_ENABLED
-        value: "true"
+        value: "false"
       - key: BOTS_BOOTSTRAP_CONTENT
-        value: "true"
+        value: "false"
       - key: BOT_USER_COUNT
-        value: "80"
+        value: "40"
 
       # OAuth (opcional). Si no usas Google/Apple, déjalos sin valor.
       - key: GOOGLE_CLIENT_ID

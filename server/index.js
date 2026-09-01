@@ -6,11 +6,13 @@ import express from 'express'
 import helmet from 'helmet'
 import jwt from 'jsonwebtoken'
 import multer from 'multer'
+import { authenticator as totpAuthenticator } from 'otplib'
+import { createClient as createRedisClient } from 'redis'
 import { OAuth2Client } from 'google-auth-library'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 import { nanoid } from 'nanoid'
 import { Buffer } from 'node:buffer'
-import { createHash, randomInt } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomInt } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -61,12 +63,78 @@ const PUBLIC_MEDIA_FILE_PREFIX = 'public-seed-'
 
 const IS_PRODUCTION = process.env.NODE_ENV === 'production'
 const AUTH_JWT_SECRET = process.env.AUTH_JWT_SECRET ?? 'vensur-dev-secret-change-me'
+const AUTH_PASSWORD_HASH_ROUNDS = Math.max(
+  10,
+  Number.parseInt(process.env.AUTH_PASSWORD_HASH_ROUNDS ?? '11', 10) || 11,
+)
+const DB_BUSY_TIMEOUT_MS = Math.max(
+  1000,
+  Number.parseInt(process.env.DB_BUSY_TIMEOUT_MS ?? '5000', 10) || 5000,
+)
+const DB_SYNCHRONOUS_MODE = (() => {
+  const requested = safeString(process.env.DB_SYNCHRONOUS).toUpperCase()
+  if (requested === 'OFF' || requested === 'NORMAL' || requested === 'FULL' || requested === 'EXTRA') {
+    return requested
+  }
+  return 'FULL'
+})()
+const REQUIRE_PERSISTENT_STORAGE = String(
+  process.env.REQUIRE_PERSISTENT_STORAGE ?? (IS_PRODUCTION ? 'true' : 'false'),
+).trim().toLowerCase() === 'true'
 
 if (IS_PRODUCTION && (!process.env.AUTH_JWT_SECRET || AUTH_JWT_SECRET.length < 24)) {
   throw new Error('AUTH_JWT_SECRET debe definirse con un valor fuerte (>=24 caracteres) en produccion.')
 }
 
-const AUTH_JWT_EXPIRES_IN = process.env.AUTH_JWT_EXPIRES_IN ?? '7d'
+const AUTH_JWT_EXPIRES_IN = safeString(process.env.AUTH_JWT_EXPIRES_IN)
+const AUTH_ACCESS_TOKEN_EXPIRES_IN =
+  safeString(process.env.AUTH_ACCESS_TOKEN_EXPIRES_IN) || AUTH_JWT_EXPIRES_IN || '15m'
+const AUTH_ACCESS_COOKIE_NAME = safeString(process.env.AUTH_ACCESS_COOKIE_NAME) || 'vensur_access'
+const AUTH_REFRESH_COOKIE_NAME = safeString(process.env.AUTH_REFRESH_COOKIE_NAME) || 'vensur_refresh'
+const AUTH_ACCESS_COOKIE_MAX_AGE_MS = Math.max(
+  60_000,
+  Number.parseInt(process.env.AUTH_ACCESS_COOKIE_MAX_AGE_MS ?? '', 10) || 15 * 60 * 1000,
+)
+const AUTH_REFRESH_TOKEN_TTL_DAYS = Math.max(
+  1,
+  Number.parseInt(process.env.AUTH_REFRESH_TOKEN_TTL_DAYS ?? '', 10) || 14,
+)
+const AUTH_REFRESH_COOKIE_MAX_AGE_MS = AUTH_REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000
+const AUTH_COOKIE_DOMAIN = safeString(process.env.AUTH_COOKIE_DOMAIN)
+const AUTH_COOKIE_PATH = safeString(process.env.AUTH_COOKIE_PATH) || '/'
+const AUTH_COOKIE_SECURE =
+  process.env.AUTH_COOKIE_SECURE == null
+    ? IS_PRODUCTION
+    : toBooleanFlag(process.env.AUTH_COOKIE_SECURE)
+const AUTH_COOKIE_SAME_SITE = (() => {
+  const requested = safeString(process.env.AUTH_COOKIE_SAME_SITE).toLowerCase()
+  if (requested === 'strict' || requested === 'lax' || requested === 'none') return requested
+  return 'lax'
+})()
+const AUTH_ALLOW_BEARER_TOKENS =
+  process.env.AUTH_ALLOW_BEARER_TOKENS == null
+    ? !IS_PRODUCTION
+    : toBooleanFlag(process.env.AUTH_ALLOW_BEARER_TOKENS)
+const AUTH_EXPOSE_TOKEN_RESPONSE =
+  process.env.AUTH_EXPOSE_TOKEN_RESPONSE == null
+    ? !IS_PRODUCTION
+    : toBooleanFlag(process.env.AUTH_EXPOSE_TOKEN_RESPONSE)
+const REQUIRE_STRICT_CORS =
+  process.env.REQUIRE_STRICT_CORS == null
+    ? IS_PRODUCTION
+    : toBooleanFlag(process.env.REQUIRE_STRICT_CORS)
+
+if (AUTH_COOKIE_SAME_SITE === 'none' && !AUTH_COOKIE_SECURE) {
+  throw new Error('AUTH_COOKIE_SAME_SITE=none requiere AUTH_COOKIE_SECURE=true para proteger la sesion.')
+}
+
+if (IS_PRODUCTION && AUTH_ALLOW_BEARER_TOKENS) {
+  console.warn('[seguridad] AUTH_ALLOW_BEARER_TOKENS=true en produccion permite sesiones por header Authorization. Recomendado: false.')
+}
+
+if (IS_PRODUCTION && AUTH_EXPOSE_TOKEN_RESPONSE) {
+  console.warn('[seguridad] AUTH_EXPOSE_TOKEN_RESPONSE=true en produccion expone el token en JSON. Recomendado: false.')
+}
 // Render/Heroku/etc. inyectan PORT; en local usamos API_PORT o 8787.
 const API_PORT = Number.parseInt(process.env.PORT ?? process.env.API_PORT ?? '8787', 10) || 8787
 const TRUST_PROXY = safeString(process.env.TRUST_PROXY)
@@ -74,6 +142,138 @@ const ALLOWED_ORIGINS = safeString(process.env.ALLOWED_ORIGINS)
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean)
+
+function normalizeOriginValue(value) {
+  const text = safeString(value)
+  if (!text) return ''
+
+  try {
+    const parsed = new URL(text)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+    return `${parsed.protocol}//${parsed.host}`.toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
+const ALLOWED_ORIGIN_SET = new Set(
+  ALLOWED_ORIGINS.map((origin) => normalizeOriginValue(origin)).filter(Boolean),
+)
+
+if (REQUIRE_STRICT_CORS && ALLOWED_ORIGIN_SET.size === 0) {
+  throw new Error('ALLOWED_ORIGINS debe definirse cuando REQUIRE_STRICT_CORS=true para limitar CORS en produccion.')
+}
+
+if (IS_PRODUCTION && ALLOWED_ORIGIN_SET.size === 0) {
+  console.warn('[seguridad] ALLOWED_ORIGINS esta vacio en produccion; define origenes explicitos para CORS.')
+}
+
+const AUTH_SECURITY_KEY_PREFIX = safeString(process.env.AUTH_SECURITY_KEY_PREFIX) || 'vensur:auth'
+const AUTH_REDIS_URL = safeString(process.env.AUTH_REDIS_URL) || safeString(process.env.REDIS_URL)
+const AUTH_REDIS_ENABLED =
+  process.env.AUTH_REDIS_ENABLED == null
+    ? Boolean(AUTH_REDIS_URL)
+    : toBooleanFlag(process.env.AUTH_REDIS_ENABLED)
+const AUTH_REDIS_CONNECT_TIMEOUT_MS = Math.max(
+  300,
+  Number.parseInt(process.env.AUTH_REDIS_CONNECT_TIMEOUT_MS ?? '', 10) || 1500,
+)
+const AUTH_REDIS_RETRY_BACKOFF_MS = Math.max(
+  1_000,
+  Number.parseInt(process.env.AUTH_REDIS_RETRY_BACKOFF_MS ?? '', 10) || 30_000,
+)
+const AUTH_LOGIN_FAIL_WINDOW_MS = Math.max(
+  30_000,
+  Number.parseInt(process.env.AUTH_LOGIN_FAIL_WINDOW_MS ?? '', 10) || 30 * 60 * 1000,
+)
+const AUTH_LOGIN_LOCK_L1_AFTER = Math.max(
+  3,
+  Number.parseInt(process.env.AUTH_LOGIN_LOCK_L1_AFTER ?? '', 10) || 5,
+)
+const AUTH_LOGIN_LOCK_L1_MS = Math.max(
+  10_000,
+  Number.parseInt(process.env.AUTH_LOGIN_LOCK_L1_MS ?? '', 10) || 2 * 60 * 1000,
+)
+const AUTH_LOGIN_LOCK_L2_AFTER = Math.max(
+  AUTH_LOGIN_LOCK_L1_AFTER + 1,
+  Number.parseInt(process.env.AUTH_LOGIN_LOCK_L2_AFTER ?? '', 10) || 8,
+)
+const AUTH_LOGIN_LOCK_L2_MS = Math.max(
+  AUTH_LOGIN_LOCK_L1_MS,
+  Number.parseInt(process.env.AUTH_LOGIN_LOCK_L2_MS ?? '', 10) || 10 * 60 * 1000,
+)
+const AUTH_LOGIN_LOCK_L3_AFTER = Math.max(
+  AUTH_LOGIN_LOCK_L2_AFTER + 1,
+  Number.parseInt(process.env.AUTH_LOGIN_LOCK_L3_AFTER ?? '', 10) || 12,
+)
+const AUTH_LOGIN_LOCK_L3_MS = Math.max(
+  AUTH_LOGIN_LOCK_L2_MS,
+  Number.parseInt(process.env.AUTH_LOGIN_LOCK_L3_MS ?? '', 10) || 30 * 60 * 1000,
+)
+const SECURITY_EVENT_RETENTION_DAYS = Math.max(
+  7,
+  Number.parseInt(process.env.SECURITY_EVENT_RETENTION_DAYS ?? '', 10) || 30,
+)
+const AUTH_LOGIN_LOCK_STEPS = [
+  { threshold: AUTH_LOGIN_LOCK_L1_AFTER, lockMs: AUTH_LOGIN_LOCK_L1_MS },
+  { threshold: AUTH_LOGIN_LOCK_L2_AFTER, lockMs: AUTH_LOGIN_LOCK_L2_MS },
+  { threshold: AUTH_LOGIN_LOCK_L3_AFTER, lockMs: AUTH_LOGIN_LOCK_L3_MS },
+]
+const AUTH_MFA_SETUP_TOKEN_EXPIRES_IN = safeString(process.env.AUTH_MFA_SETUP_TOKEN_EXPIRES_IN) || '10m'
+const AUTH_MFA_LOGIN_CHALLENGE_TTL_MS = Math.max(
+  60_000,
+  Number.parseInt(process.env.AUTH_MFA_LOGIN_CHALLENGE_TTL_MS ?? '', 10) || 5 * 60 * 1000,
+)
+const AUTH_MFA_LOGIN_MAX_ATTEMPTS = Math.max(
+  3,
+  Number.parseInt(process.env.AUTH_MFA_LOGIN_MAX_ATTEMPTS ?? '', 10) || 6,
+)
+const AUTH_MFA_TOTP_ISSUER = safeString(process.env.AUTH_MFA_TOTP_ISSUER) || 'VensuR'
+const AUTH_MFA_SECRET_ENCRYPTION_KEY = safeString(process.env.AUTH_MFA_SECRET_ENCRYPTION_KEY)
+const SECURITY_AUDIT_ADMIN_ALLOWLIST = new Set(
+  safeString(process.env.SECURITY_AUDIT_ADMIN_ALLOWLIST)
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean),
+)
+
+if (IS_PRODUCTION && !AUTH_MFA_SECRET_ENCRYPTION_KEY) {
+  throw new Error('AUTH_MFA_SECRET_ENCRYPTION_KEY es obligatorio en produccion para proteger secretos MFA.')
+}
+
+const authMfaKeyMaterial = AUTH_MFA_SECRET_ENCRYPTION_KEY || AUTH_JWT_SECRET
+const AUTH_MFA_ENCRYPTION_KEY = createHash('sha256').update(authMfaKeyMaterial).digest()
+const AUTH_MFA_LOGIN_CHALLENGE_EXPIRES_IN_SEC = Math.max(
+  60,
+  Math.ceil(AUTH_MFA_LOGIN_CHALLENGE_TTL_MS / 1000),
+)
+
+totpAuthenticator.options = {
+  digits: 6,
+  step: 30,
+  window: 1,
+}
+
+let redisClient = null
+let redisConnectPromise = null
+let redisNextRetryAt = 0
+const localSecurityStore = new Map()
+const localSecuritySweepTimer = setInterval(() => {
+  const now = Date.now()
+  for (const [key, entry] of localSecurityStore.entries()) {
+    if (!entry || now >= entry.expiresAt) {
+      localSecurityStore.delete(key)
+    }
+  }
+}, 60_000)
+if (typeof localSecuritySweepTimer.unref === 'function') {
+  localSecuritySweepTimer.unref()
+}
+
+if (AUTH_REDIS_ENABLED && !AUTH_REDIS_URL) {
+  console.warn('[seguridad] AUTH_REDIS_ENABLED=true pero AUTH_REDIS_URL/REDIS_URL no esta definido; se usara fallback en memoria.')
+}
+
 const BOT_USER_COUNT_MAX = 500
 const BOT_USER_COUNT_DEFAULT = 200
 const BOTS_ENABLED = String(process.env.BOTS_ENABLED ?? process.env.NODE_ENV !== 'production')
@@ -90,13 +290,16 @@ const EMAIL_VERIFICATION_CODE_TTL_MINUTES = Number.parseInt(
   process.env.EMAIL_VERIFICATION_CODE_TTL_MINUTES ?? '15',
   10,
 ) || 15
-// En local se expone el código para probar sin SMTP. En producción se puede
-// forzar con AUTH_EXPOSE_VERIFICATION_CODE=true (útil para un despliegue de prueba
-// sin proveedor de correo). ¡No dejar activo en producción real!
+// En local se expone el codigo para probar sin SMTP real. En produccion se
+// permite solo si se habilita de forma explicita (no recomendado).
 const EXPOSE_DEV_VERIFICATION_CODE =
   process.env.AUTH_EXPOSE_VERIFICATION_CODE != null
     ? String(process.env.AUTH_EXPOSE_VERIFICATION_CODE).trim().toLowerCase() === 'true'
-    : process.env.NODE_ENV !== 'production'
+    : !IS_PRODUCTION
+
+if (IS_PRODUCTION && String(process.env.AUTH_EXPOSE_VERIFICATION_CODE ?? '').trim().toLowerCase() === 'true') {
+  console.warn('[seguridad] AUTH_EXPOSE_VERIFICATION_CODE=true esta activo en produccion; desactivalo para evitar filtrado de codigos.')
+}
 
 const GOOGLE_CLIENT_ID = (process.env.GOOGLE_CLIENT_ID ?? '').trim()
 const APPLE_CLIENT_ID = (process.env.APPLE_CLIENT_ID ?? '').trim()
@@ -530,13 +733,72 @@ const liveRuntime = {
   sessions: new Map(),
 }
 
+function normalizeStoragePathForChecks(targetPath) {
+  return path.resolve(targetPath).replace(/\\/g, '/').toLowerCase()
+}
+
+function isLikelyEphemeralStoragePath(targetPath) {
+  const normalized = normalizeStoragePathForChecks(targetPath)
+  const markers = ['/tmp/', '/temp/', '/var/tmp/', '/opt/render/project/src/', '/workspace/']
+  return markers.some((marker) => normalized.includes(marker))
+}
+
+function assertPersistentStorageConfiguration() {
+  if (!REQUIRE_PERSISTENT_STORAGE) return
+
+  const hasCustomDbPath = Boolean(safeString(process.env.DB_PATH))
+  const hasCustomUploadsDir = Boolean(safeString(process.env.UPLOADS_DIR))
+
+  if (!hasCustomDbPath || !hasCustomUploadsDir) {
+    throw new Error(
+      'Persistencia obligatoria: define DB_PATH y UPLOADS_DIR en almacenamiento persistente.',
+    )
+  }
+
+  if (isLikelyEphemeralStoragePath(DB_PATH) || isLikelyEphemeralStoragePath(UPLOADS_DIR)) {
+    throw new Error(
+      'DB_PATH/UPLOADS_DIR parecen efimeros. Configura un volumen persistente antes de arrancar.',
+    )
+  }
+
+  if (process.env.RENDER === 'true') {
+    const dbPathNormalized = normalizeStoragePathForChecks(DB_PATH)
+    const uploadsPathNormalized = normalizeStoragePathForChecks(UPLOADS_DIR)
+
+    if (!dbPathNormalized.startsWith('/var/data/') || !uploadsPathNormalized.startsWith('/var/data/')) {
+      throw new Error(
+        'En Render usa un Disk en /var/data y define DB_PATH=/var/data/vensur.db y UPLOADS_DIR=/var/data/uploads.',
+      )
+    }
+  }
+}
+
+function logStorageConfiguration() {
+  const isLikelyEphemeral =
+    isLikelyEphemeralStoragePath(DB_PATH) || isLikelyEphemeralStoragePath(UPLOADS_DIR)
+
+  console.log(
+    `[storage] db=${DB_PATH} uploads=${UPLOADS_DIR} requirePersistent=${REQUIRE_PERSISTENT_STORAGE} ephemeral=${isLikelyEphemeral}`,
+  )
+}
+
+assertPersistentStorageConfiguration()
+
 mkdirSync(DATA_DIR, { recursive: true })
 mkdirSync(UPLOADS_DIR, { recursive: true })
 mkdirSync(path.dirname(DB_PATH), { recursive: true })
 
 const db = new Database(DB_PATH)
 db.pragma('journal_mode = WAL')
+db.pragma(`busy_timeout = ${DB_BUSY_TIMEOUT_MS}`)
+db.pragma(`synchronous = ${DB_SYNCHRONOUS_MODE}`)
 db.pragma('foreign_keys = ON')
+try {
+  db.pragma('trusted_schema = OFF')
+} catch {
+  // Compatibilidad con builds de SQLite que no soportan este pragma.
+}
+logStorageConfiguration()
 
 function ensureColumn(tableName, columnName, definition) {
   const columns = db.prepare(`PRAGMA table_info(${tableName})`).all()
@@ -560,6 +822,10 @@ function runMigrations() {
       email_verified INTEGER NOT NULL DEFAULT 0,
       avatar_url TEXT NOT NULL DEFAULT '',
       cover_url TEXT NOT NULL DEFAULT '',
+      mfa_totp_secret_enc TEXT NOT NULL DEFAULT '',
+      mfa_enabled INTEGER NOT NULL DEFAULT 0,
+      mfa_enabled_at TEXT NOT NULL DEFAULT '',
+      mfa_last_used_at TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -706,6 +972,32 @@ function runMigrations() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS auth_refresh_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      family_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      consumed_at TEXT,
+      revoked_at TEXT,
+      replaced_by_token_id TEXT NOT NULL DEFAULT '',
+      created_by_ip TEXT NOT NULL DEFAULT '',
+      created_by_user_agent TEXT NOT NULL DEFAULT '',
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS security_audit_events (
+      id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'medium',
+      user_id TEXT NOT NULL DEFAULT '',
+      request_ip TEXT NOT NULL DEFAULT '',
+      identifier TEXT NOT NULL DEFAULT '',
+      details_json TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_posts_user_created_at ON posts(user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_post_comments_post_created_at ON post_comments(post_id, created_at DESC);
@@ -727,6 +1019,11 @@ function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_follows_pair ON follows(follower_user_id, followed_user_id);
     CREATE INDEX IF NOT EXISTS idx_social_accounts_user_id ON social_accounts(user_id);
     CREATE INDEX IF NOT EXISTS idx_email_verification_codes_user_created ON email_verification_codes(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_auth_refresh_tokens_user_created ON auth_refresh_tokens(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_auth_refresh_tokens_family ON auth_refresh_tokens(family_id);
+    CREATE INDEX IF NOT EXISTS idx_auth_refresh_tokens_expires ON auth_refresh_tokens(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_security_audit_events_created ON security_audit_events(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_security_audit_events_type_created ON security_audit_events(event_type, created_at DESC);
   `)
 
   ensureColumn('users', 'bio', "TEXT NOT NULL DEFAULT ''")
@@ -735,6 +1032,10 @@ function runMigrations() {
   ensureColumn('users', 'email_verified', 'INTEGER NOT NULL DEFAULT 0')
   ensureColumn('users', 'avatar_url', "TEXT NOT NULL DEFAULT ''")
   ensureColumn('users', 'cover_url', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn('users', 'mfa_totp_secret_enc', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn('users', 'mfa_enabled', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn('users', 'mfa_enabled_at', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn('users', 'mfa_last_used_at', "TEXT NOT NULL DEFAULT ''")
 
   ensureColumn('posts', 'media_url', "TEXT NOT NULL DEFAULT ''")
   ensureColumn('posts', 'media_type', "TEXT NOT NULL DEFAULT ''")
@@ -760,19 +1061,29 @@ function runMigrations() {
   ensureColumn('music_library', 'duration_sec', 'INTEGER NOT NULL DEFAULT 0')
   ensureColumn('music_library', 'preview_url', "TEXT NOT NULL DEFAULT ''")
   ensureColumn('music_library', 'is_active', 'INTEGER NOT NULL DEFAULT 1')
+
+  ensureColumn('auth_refresh_tokens', 'replaced_by_token_id', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn('auth_refresh_tokens', 'created_by_ip', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn('auth_refresh_tokens', 'created_by_user_agent', "TEXT NOT NULL DEFAULT ''")
+
+  ensureColumn('security_audit_events', 'severity', "TEXT NOT NULL DEFAULT 'medium'")
+  ensureColumn('security_audit_events', 'user_id', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn('security_audit_events', 'request_ip', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn('security_audit_events', 'identifier', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn('security_audit_events', 'details_json', "TEXT NOT NULL DEFAULT ''")
 }
 
 runMigrations()
 
 const selectUserByIdStmt = db.prepare(`
-  SELECT id, email, username, display_name, password_hash, bio, phone, profile_visibility, email_verified, avatar_url, cover_url, created_at, updated_at
+  SELECT id, email, username, display_name, password_hash, bio, phone, profile_visibility, email_verified, avatar_url, cover_url, mfa_totp_secret_enc, mfa_enabled, mfa_enabled_at, mfa_last_used_at, created_at, updated_at
   FROM users
   WHERE id = ?
   LIMIT 1
 `)
 
 const selectUserByEmailStmt = db.prepare(`
-  SELECT id, email, username, display_name, password_hash, bio, phone, profile_visibility, email_verified, avatar_url, cover_url, created_at, updated_at
+  SELECT id, email, username, display_name, password_hash, bio, phone, profile_visibility, email_verified, avatar_url, cover_url, mfa_totp_secret_enc, mfa_enabled, mfa_enabled_at, mfa_last_used_at, created_at, updated_at
   FROM users
   WHERE email = ?
   LIMIT 1
@@ -786,7 +1097,7 @@ const selectUserByUsernameStmt = db.prepare(`
 `)
 
 const selectUserForLoginStmt = db.prepare(`
-  SELECT id, email, username, display_name, password_hash, bio, phone, profile_visibility, email_verified, avatar_url, cover_url, created_at, updated_at
+  SELECT id, email, username, display_name, password_hash, bio, phone, profile_visibility, email_verified, avatar_url, cover_url, mfa_totp_secret_enc, mfa_enabled, mfa_enabled_at, mfa_last_used_at, created_at, updated_at
   FROM users
   WHERE email = ? OR username = ?
   LIMIT 1
@@ -834,8 +1145,20 @@ const markUserEmailVerifiedStmt = db.prepare(`
   WHERE id = ?
 `)
 
+const updateUserMfaStateStmt = db.prepare(`
+  UPDATE users
+  SET mfa_totp_secret_enc = ?, mfa_enabled = ?, mfa_enabled_at = ?, mfa_last_used_at = ?, updated_at = ?
+  WHERE id = ?
+`)
+
+const markUserMfaLastUsedStmt = db.prepare(`
+  UPDATE users
+  SET mfa_last_used_at = ?
+  WHERE id = ?
+`)
+
 const selectUserBySocialSubStmt = db.prepare(`
-  SELECT u.id, u.email, u.username, u.display_name, u.password_hash, u.bio, u.phone, u.profile_visibility, u.email_verified, u.avatar_url, u.cover_url, u.created_at, u.updated_at
+  SELECT u.id, u.email, u.username, u.display_name, u.password_hash, u.bio, u.phone, u.profile_visibility, u.email_verified, u.avatar_url, u.cover_url, u.mfa_totp_secret_enc, u.mfa_enabled, u.mfa_enabled_at, u.mfa_last_used_at, u.created_at, u.updated_at
   FROM social_accounts s
   JOIN users u ON u.id = s.user_id
   WHERE s.provider = ? AND s.provider_sub = ?
@@ -1474,9 +1797,172 @@ const incrementVerificationCodeAttemptsStmt = db.prepare(`
   WHERE id = ?
 `)
 
+const insertRefreshTokenStmt = db.prepare(`
+  INSERT INTO auth_refresh_tokens (
+    id,
+    user_id,
+    family_id,
+    token_hash,
+    created_at,
+    expires_at,
+    consumed_at,
+    revoked_at,
+    replaced_by_token_id,
+    created_by_ip,
+    created_by_user_agent
+  ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, '', ?, ?)
+`)
+
+const selectRefreshTokenByHashStmt = db.prepare(`
+  SELECT
+    id,
+    user_id,
+    family_id,
+    token_hash,
+    created_at,
+    expires_at,
+    consumed_at,
+    revoked_at,
+    replaced_by_token_id,
+    created_by_ip,
+    created_by_user_agent
+  FROM auth_refresh_tokens
+  WHERE token_hash = ?
+  LIMIT 1
+`)
+
+const markRefreshTokenConsumedStmt = db.prepare(`
+  UPDATE auth_refresh_tokens
+  SET consumed_at = ?, replaced_by_token_id = ?
+  WHERE id = ? AND consumed_at IS NULL AND revoked_at IS NULL
+`)
+
+const revokeRefreshTokenByIdStmt = db.prepare(`
+  UPDATE auth_refresh_tokens
+  SET revoked_at = COALESCE(revoked_at, ?)
+  WHERE id = ?
+`)
+
+const revokeRefreshTokenFamilyStmt = db.prepare(`
+  UPDATE auth_refresh_tokens
+  SET revoked_at = COALESCE(revoked_at, ?)
+  WHERE family_id = ? AND revoked_at IS NULL
+`)
+
+const revokeRefreshTokensByUserStmt = db.prepare(`
+  UPDATE auth_refresh_tokens
+  SET revoked_at = COALESCE(revoked_at, ?)
+  WHERE user_id = ? AND revoked_at IS NULL
+`)
+
+const deleteExpiredOrRevokedRefreshTokensStmt = db.prepare(`
+  DELETE FROM auth_refresh_tokens
+  WHERE expires_at <= ? OR revoked_at IS NOT NULL
+`)
+
+const insertSecurityAuditEventStmt = db.prepare(`
+  INSERT INTO security_audit_events (
+    id,
+    event_type,
+    severity,
+    user_id,
+    request_ip,
+    identifier,
+    details_json,
+    created_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`)
+
+const deleteOldSecurityAuditEventsStmt = db.prepare(`
+  DELETE FROM security_audit_events
+  WHERE created_at <= ?
+`)
+
+const listSecurityAuditEventsStmt = db.prepare(`
+  SELECT id, event_type, severity, user_id, request_ip, identifier, details_json, created_at
+  FROM security_audit_events
+  WHERE created_at >= ?
+  ORDER BY created_at DESC
+  LIMIT ?
+`)
+
+const issueRefreshTokenTx = db.transaction((userId, familyId, requestIp, requestUserAgent) => {
+  const tokenId = nanoid()
+  const token = randomBytes(48).toString('base64url')
+  const now = nowIso()
+  const expiresAt = addDaysIso(AUTH_REFRESH_TOKEN_TTL_DAYS)
+  const nextFamilyId = familyId || nanoid()
+
+  insertRefreshTokenStmt.run(
+    tokenId,
+    userId,
+    nextFamilyId,
+    hashRefreshToken(token),
+    now,
+    expiresAt,
+    requestIp,
+    requestUserAgent,
+  )
+
+  return {
+    token,
+    tokenId,
+    familyId: nextFamilyId,
+    expiresAt,
+  }
+})
+
+const rotateRefreshTokenTx = db.transaction((currentTokenId, userId, familyId, requestIp, requestUserAgent) => {
+  const tokenId = nanoid()
+  const token = randomBytes(48).toString('base64url')
+  const consumedAt = nowIso()
+  const expiresAt = addDaysIso(AUTH_REFRESH_TOKEN_TTL_DAYS)
+
+  const consumeResult = markRefreshTokenConsumedStmt.run(consumedAt, tokenId, currentTokenId)
+  if (consumeResult.changes !== 1) {
+    throw new Error('REFRESH_TOKEN_NOT_ROTATABLE')
+  }
+
+  insertRefreshTokenStmt.run(
+    tokenId,
+    userId,
+    familyId,
+    hashRefreshToken(token),
+    consumedAt,
+    expiresAt,
+    requestIp,
+    requestUserAgent,
+  )
+
+  return {
+    token,
+    tokenId,
+    familyId,
+    expiresAt,
+  }
+})
+
+function pruneExpiredOrRevokedRefreshTokens() {
+  deleteExpiredOrRevokedRefreshTokensStmt.run(nowIso())
+}
+
+function pruneOldSecurityEvents() {
+  deleteOldSecurityAuditEventsStmt.run(addDaysIso(-SECURITY_EVENT_RETENTION_DAYS))
+}
+
 const danglingLiveClosedAt = nowIso()
 closeDanglingLiveSessionsStmt.run(danglingLiveClosedAt, danglingLiveClosedAt)
 seedMusicLibrary()
+pruneExpiredOrRevokedRefreshTokens()
+pruneOldSecurityEvents()
+
+const securityMaintenanceTimer = setInterval(() => {
+  pruneExpiredOrRevokedRefreshTokens()
+  pruneOldSecurityEvents()
+}, 6 * 60 * 60 * 1000)
+if (typeof securityMaintenanceTimer.unref === 'function') {
+  securityMaintenanceTimer.unref()
+}
 
 function mapMusicTrackRow(row) {
   if (!row) return null
@@ -1626,11 +2112,787 @@ function canViewerAccessUserContent(viewerUserId, ownerUserId, ownerVisibility) 
   return areUsersFriends(viewerUserId, ownerUserId)
 }
 
-function resolveOptionalAuthUser(req) {
-  const authorization = typeof req.headers.authorization === 'string' ? req.headers.authorization : ''
-  if (!authorization.startsWith('Bearer ')) return null
+function parseCookieHeader(headerValue) {
+  const source = typeof headerValue === 'string' ? headerValue : ''
+  if (!source) return {}
 
-  const token = authorization.slice('Bearer '.length).trim()
+  const entries = source.split(';')
+  const parsed = {}
+
+  for (const entry of entries) {
+    const separatorIndex = entry.indexOf('=')
+    if (separatorIndex < 0) continue
+
+    const key = entry.slice(0, separatorIndex).trim()
+    if (!key) continue
+
+    const rawValue = entry.slice(separatorIndex + 1).trim()
+
+    try {
+      parsed[key] = decodeURIComponent(rawValue)
+    } catch {
+      parsed[key] = rawValue
+    }
+  }
+
+  return parsed
+}
+
+function getCookieValue(req, cookieName) {
+  if (!cookieName) return ''
+  const cookies = parseCookieHeader(req.headers.cookie)
+  const value = cookies[cookieName]
+  return typeof value === 'string' ? value : ''
+}
+
+function getAccessTokenFromCookie(req) {
+  return getCookieValue(req, AUTH_ACCESS_COOKIE_NAME)
+}
+
+function getRefreshTokenFromRequest(req) {
+  return getCookieValue(req, AUTH_REFRESH_COOKIE_NAME)
+}
+
+function getSessionTokenFromRequest(req) {
+  const accessToken = getAccessTokenFromCookie(req)
+  if (accessToken) return accessToken
+
+  if (!AUTH_ALLOW_BEARER_TOKENS) return ''
+
+  const authorization = typeof req.headers.authorization === 'string' ? req.headers.authorization : ''
+  if (!authorization.startsWith('Bearer ')) return ''
+
+  return authorization.slice('Bearer '.length).trim()
+}
+
+function hashRefreshToken(token) {
+  return createHash('sha256').update(typeof token === 'string' ? token : '').digest('hex')
+}
+
+function buildAuthCookieOptions(maxAgeMs) {
+  const options = {
+    httpOnly: true,
+    secure: AUTH_COOKIE_SECURE,
+    sameSite: AUTH_COOKIE_SAME_SITE,
+    path: AUTH_COOKIE_PATH,
+    maxAge: maxAgeMs,
+  }
+
+  if (AUTH_COOKIE_DOMAIN) {
+    options.domain = AUTH_COOKIE_DOMAIN
+  }
+
+  return options
+}
+
+function clearAuthCookies(res) {
+  const options = buildAuthCookieOptions(0)
+  res.clearCookie(AUTH_ACCESS_COOKIE_NAME, options)
+  res.clearCookie(AUTH_REFRESH_COOKIE_NAME, options)
+}
+
+function setAuthCookies(res, accessToken, refreshToken) {
+  res.cookie(
+    AUTH_ACCESS_COOKIE_NAME,
+    accessToken,
+    buildAuthCookieOptions(AUTH_ACCESS_COOKIE_MAX_AGE_MS),
+  )
+
+  res.cookie(
+    AUTH_REFRESH_COOKIE_NAME,
+    refreshToken,
+    buildAuthCookieOptions(AUTH_REFRESH_COOKIE_MAX_AGE_MS),
+  )
+}
+
+function getRequestIpAddress(req) {
+  return safeString(req.ip || req.socket?.remoteAddress).slice(0, 120)
+}
+
+function getRequestUserAgent(req) {
+  return safeString(req.headers['user-agent']).slice(0, 240)
+}
+
+function normalizeSecuritySeverity(value) {
+  const severity = safeString(value).toLowerCase()
+  if (severity === 'low' || severity === 'medium' || severity === 'high' || severity === 'critical') {
+    return severity
+  }
+  return 'medium'
+}
+
+function sanitizeSecurityEventType(value) {
+  const type = safeString(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9_.:-]/g, '_')
+    .slice(0, 80)
+
+  return type || 'unknown'
+}
+
+function safeSecurityDetailsJson(value) {
+  if (!value || typeof value !== 'object') return ''
+
+  try {
+    const serialized = JSON.stringify(value)
+    return serialized.length > 1800 ? `${serialized.slice(0, 1800)}...` : serialized
+  } catch {
+    return ''
+  }
+}
+
+function recordSecurityEvent(eventType, options = {}) {
+  const now = nowIso()
+  const type = sanitizeSecurityEventType(eventType)
+  const severity = normalizeSecuritySeverity(options.severity)
+  const userId = safeString(options.userId).slice(0, 72)
+  const requestIp = safeString(options.requestIp).slice(0, 120)
+  const identifier = safeString(options.identifier).toLowerCase().slice(0, 120)
+  const detailsJson = safeSecurityDetailsJson(options.details)
+
+  try {
+    insertSecurityAuditEventStmt.run(
+      nanoid(),
+      type,
+      severity,
+      userId,
+      requestIp,
+      identifier,
+      detailsJson,
+      now,
+    )
+  } catch (error) {
+    console.error('[seguridad] No se pudo registrar evento de auditoria:', error instanceof Error ? error.message : error)
+  }
+
+  if (severity === 'high' || severity === 'critical') {
+    console.warn('[seguridad:evento]', { type, severity, userId, requestIp, identifier })
+  }
+}
+
+function buildSecurityStoreKey(...parts) {
+  const normalizedParts = parts
+    .map((part) => safeString(part))
+    .filter(Boolean)
+  return [AUTH_SECURITY_KEY_PREFIX, ...normalizedParts].join(':')
+}
+
+function normalizeTotpCode(value) {
+  return safeString(value).replace(/[\s-]/g, '').replace(/\D/g, '').slice(0, 6)
+}
+
+function maskSecurityEmail(email) {
+  const normalized = normalizeEmail(email)
+  const [localPart = '', domainPart = ''] = normalized.split('@')
+  if (!domainPart) return ''
+  const visible = localPart.slice(0, 2)
+  return `${visible || '*'}***@${domainPart}`
+}
+
+function isSecurityAuditAdminUser(user) {
+  if (!user || SECURITY_AUDIT_ADMIN_ALLOWLIST.size === 0) return false
+
+  const candidates = [
+    safeString(user.id).toLowerCase(),
+    normalizeEmail(user.email),
+    normalizeUsername(user.username),
+  ].filter(Boolean)
+
+  return candidates.some((candidate) => SECURITY_AUDIT_ADMIN_ALLOWLIST.has(candidate))
+}
+
+function hasUserMfaEnabled(user) {
+  return Boolean(Number(user?.mfa_enabled)) && Boolean(safeString(user?.mfa_totp_secret_enc))
+}
+
+function encryptMfaSecret(secret) {
+  const value = safeString(secret)
+  if (!value) return ''
+
+  const iv = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', AUTH_MFA_ENCRYPTION_KEY, iv)
+  const encrypted = Buffer.concat([
+    cipher.update(value, 'utf8'),
+    cipher.final(),
+  ])
+  const authTag = cipher.getAuthTag()
+
+  return `v1.${iv.toString('base64url')}.${authTag.toString('base64url')}.${encrypted.toString('base64url')}`
+}
+
+function decryptMfaSecret(ciphertext) {
+  const source = safeString(ciphertext)
+  if (!source) return ''
+
+  const parts = source.split('.')
+  if (parts.length !== 4 || parts[0] !== 'v1') return ''
+
+  try {
+    const iv = Buffer.from(parts[1], 'base64url')
+    const authTag = Buffer.from(parts[2], 'base64url')
+    const encrypted = Buffer.from(parts[3], 'base64url')
+    const decipher = createDecipheriv('aes-256-gcm', AUTH_MFA_ENCRYPTION_KEY, iv)
+    decipher.setAuthTag(authTag)
+
+    return Buffer.concat([
+      decipher.update(encrypted),
+      decipher.final(),
+    ]).toString('utf8')
+  } catch {
+    return ''
+  }
+}
+
+function buildMfaLoginChallengeKey(challengeId) {
+  return buildSecurityStoreKey('mfa', 'login', 'challenge', challengeId)
+}
+
+function buildMfaLoginChallengeAttemptsKey(challengeId) {
+  return buildSecurityStoreKey('mfa', 'login', 'attempts', challengeId)
+}
+
+function signMfaSetupToken(userId, secret) {
+  return jwt.sign(
+    {
+      sub: userId,
+      kind: 'mfa_setup',
+      secret,
+    },
+    AUTH_JWT_SECRET,
+    { expiresIn: AUTH_MFA_SETUP_TOKEN_EXPIRES_IN },
+  )
+}
+
+function verifyMfaSetupToken(token) {
+  try {
+    const payload = jwt.verify(token, AUTH_JWT_SECRET)
+    if (!payload || typeof payload !== 'object') return null
+
+    const kind = safeString(payload.kind)
+    const sub = safeString(payload.sub)
+    const secret = safeString(payload.secret)
+
+    if (kind !== 'mfa_setup' || !sub || !secret) return null
+    return {
+      userId: sub,
+      secret,
+    }
+  } catch {
+    return null
+  }
+}
+
+function signMfaLoginChallengeToken(userId, challengeId) {
+  return jwt.sign(
+    {
+      sub: userId,
+      kind: 'mfa_login',
+      challengeId,
+    },
+    AUTH_JWT_SECRET,
+    { expiresIn: AUTH_MFA_LOGIN_CHALLENGE_EXPIRES_IN_SEC },
+  )
+}
+
+function verifyMfaLoginChallengeToken(token) {
+  try {
+    const payload = jwt.verify(token, AUTH_JWT_SECRET)
+    if (!payload || typeof payload !== 'object') return null
+
+    const kind = safeString(payload.kind)
+    const userId = safeString(payload.sub)
+    const challengeId = safeString(payload.challengeId)
+
+    if (kind !== 'mfa_login' || !userId || !challengeId) return null
+    return {
+      userId,
+      challengeId,
+    }
+  } catch {
+    return null
+  }
+}
+
+function mapSecurityAuditEventRow(row) {
+  if (!row) return null
+
+  let details = null
+  if (typeof row.details_json === 'string' && row.details_json.trim()) {
+    try {
+      details = JSON.parse(row.details_json)
+    } catch {
+      details = { raw: row.details_json }
+    }
+  }
+
+  return {
+    id: row.id,
+    eventType: row.event_type,
+    severity: normalizeSecuritySeverity(row.severity),
+    userId: row.user_id || '',
+    requestIp: row.request_ip || '',
+    identifier: row.identifier || '',
+    details,
+    createdAt: row.created_at || '',
+  }
+}
+
+function localStoreGetEntry(key) {
+  const entry = localSecurityStore.get(key)
+  if (!entry) return null
+
+  if (Date.now() >= entry.expiresAt) {
+    localSecurityStore.delete(key)
+    return null
+  }
+
+  return entry
+}
+
+function localStoreIncrement(key, ttlMs) {
+  const now = Date.now()
+  const active = localStoreGetEntry(key)
+  const count = active ? Number(active.value || 0) + 1 : 1
+  const expiresAt = active ? active.expiresAt : now + ttlMs
+  localSecurityStore.set(key, { value: String(count), expiresAt })
+  return { count, ttlMs: Math.max(1, expiresAt - now), backend: 'memory' }
+}
+
+function localStoreSet(key, value, ttlMs) {
+  localSecurityStore.set(key, {
+    value: String(value),
+    expiresAt: Date.now() + Math.max(1, ttlMs),
+  })
+}
+
+function localStoreDelete(key) {
+  localSecurityStore.delete(key)
+}
+
+function localStoreGetValue(key) {
+  const entry = localStoreGetEntry(key)
+  if (!entry) return ''
+  return typeof entry.value === 'string' ? entry.value : String(entry.value ?? '')
+}
+
+function localStoreTtlMs(key) {
+  const entry = localStoreGetEntry(key)
+  if (!entry) return 0
+  return Math.max(0, entry.expiresAt - Date.now())
+}
+
+function markRedisUnavailable(error) {
+  redisNextRetryAt = Date.now() + AUTH_REDIS_RETRY_BACKOFF_MS
+
+  if (redisClient) {
+    try {
+      redisClient.quit().catch(() => {})
+    } catch {
+      // no-op
+    }
+  }
+
+  redisClient = null
+  redisConnectPromise = null
+
+  console.warn('[seguridad] Redis no disponible; usando fallback en memoria:', error instanceof Error ? error.message : error)
+}
+
+async function getRedisAuthStoreClient() {
+  if (!AUTH_REDIS_ENABLED || !AUTH_REDIS_URL) return null
+
+  if (redisClient?.isOpen) return redisClient
+
+  if (Date.now() < redisNextRetryAt) return null
+
+  if (redisConnectPromise) return redisConnectPromise
+
+  const client = createRedisClient({
+    url: AUTH_REDIS_URL,
+    socket: {
+      connectTimeout: AUTH_REDIS_CONNECT_TIMEOUT_MS,
+    },
+  })
+
+  client.on('error', (error) => {
+    markRedisUnavailable(error)
+  })
+
+  redisConnectPromise = client
+    .connect()
+    .then(() => {
+      redisClient = client
+      return client
+    })
+    .catch((error) => {
+      markRedisUnavailable(error)
+      return null
+    })
+    .finally(() => {
+      redisConnectPromise = null
+    })
+
+  return redisConnectPromise
+}
+
+async function incrementSecurityCounter(key, windowMs) {
+  const redis = await getRedisAuthStoreClient()
+
+  if (redis) {
+    try {
+      const count = Number(await redis.incr(key))
+      if (count <= 1) {
+        await redis.pExpire(key, windowMs)
+      }
+
+      let ttlMs = Number(await redis.pTTL(key))
+      if (!Number.isFinite(ttlMs) || ttlMs < 1) {
+        await redis.pExpire(key, windowMs)
+        ttlMs = windowMs
+      }
+
+      return {
+        count,
+        ttlMs,
+        backend: 'redis',
+      }
+    } catch (error) {
+      markRedisUnavailable(error)
+    }
+  }
+
+  return localStoreIncrement(key, windowMs)
+}
+
+async function setSecurityKeyWithTtl(key, value, ttlMs) {
+  const redis = await getRedisAuthStoreClient()
+
+  if (redis) {
+    try {
+      await redis.set(key, String(value), { PX: Math.max(1, ttlMs) })
+      return
+    } catch (error) {
+      markRedisUnavailable(error)
+    }
+  }
+
+  localStoreSet(key, value, ttlMs)
+}
+
+async function deleteSecurityKey(key) {
+  const redis = await getRedisAuthStoreClient()
+
+  if (redis) {
+    try {
+      await redis.del(key)
+      return
+    } catch (error) {
+      markRedisUnavailable(error)
+    }
+  }
+
+  localStoreDelete(key)
+}
+
+async function getSecurityKeyTtlMs(key) {
+  const redis = await getRedisAuthStoreClient()
+
+  if (redis) {
+    try {
+      const ttl = Number(await redis.pTTL(key))
+      return Number.isFinite(ttl) && ttl > 0 ? ttl : 0
+    } catch (error) {
+      markRedisUnavailable(error)
+    }
+  }
+
+  return localStoreTtlMs(key)
+}
+
+async function getSecurityKeyValue(key) {
+  const redis = await getRedisAuthStoreClient()
+
+  if (redis) {
+    try {
+      const value = await redis.get(key)
+      return typeof value === 'string' ? value : ''
+    } catch (error) {
+      markRedisUnavailable(error)
+    }
+  }
+
+  return localStoreGetValue(key)
+}
+
+function toSafeAuthIdentifier(value) {
+  return safeString(value).toLowerCase().slice(0, 120)
+}
+
+function buildLoginSecurityKeys(req, identifier) {
+  const ip = getRequestIpAddress(req) || 'unknown'
+  const normalizedIdentifier = toSafeAuthIdentifier(identifier) || 'unknown'
+
+  return {
+    ip,
+    identifier: normalizedIdentifier,
+    failByIp: buildSecurityStoreKey('login', 'fail', 'ip', ip),
+    failByIdentifier: buildSecurityStoreKey('login', 'fail', 'id', normalizedIdentifier),
+    lockByIp: buildSecurityStoreKey('login', 'lock', 'ip', ip),
+    lockByIdentifier: buildSecurityStoreKey('login', 'lock', 'id', normalizedIdentifier),
+  }
+}
+
+function resolveLoginLockStep(attempts) {
+  let selected = null
+
+  for (const step of AUTH_LOGIN_LOCK_STEPS) {
+    if (attempts >= step.threshold) {
+      selected = step
+    }
+  }
+
+  return selected
+}
+
+async function readLoginLockStatus(req, identifier) {
+  const keys = buildLoginSecurityKeys(req, identifier)
+  const [identifierLockMs, ipLockMs] = await Promise.all([
+    getSecurityKeyTtlMs(keys.lockByIdentifier),
+    getSecurityKeyTtlMs(keys.lockByIp),
+  ])
+
+  const lockMs = Math.max(identifierLockMs, ipLockMs)
+
+  return {
+    locked: lockMs > 0,
+    lockMs,
+    keys,
+  }
+}
+
+async function registerFailedLoginAttempt(req, identifier, reason) {
+  const keys = buildLoginSecurityKeys(req, identifier)
+  const [byIdentifier, byIp] = await Promise.all([
+    incrementSecurityCounter(keys.failByIdentifier, AUTH_LOGIN_FAIL_WINDOW_MS),
+    incrementSecurityCounter(keys.failByIp, AUTH_LOGIN_FAIL_WINDOW_MS),
+  ])
+
+  const attempts = Math.max(byIdentifier.count, byIp.count)
+  const step = resolveLoginLockStep(attempts)
+
+  if (!step) {
+    return {
+      locked: false,
+      attempts,
+      lockMs: 0,
+      keys,
+    }
+  }
+
+  await Promise.all([
+    setSecurityKeyWithTtl(keys.lockByIdentifier, 1, step.lockMs),
+    setSecurityKeyWithTtl(keys.lockByIp, 1, step.lockMs),
+  ])
+
+  recordSecurityEvent('auth.login.locked', {
+    severity: 'high',
+    requestIp: keys.ip,
+    identifier: keys.identifier,
+    details: {
+      attempts,
+      lockMs: step.lockMs,
+      reason,
+    },
+  })
+
+  return {
+    locked: true,
+    attempts,
+    lockMs: step.lockMs,
+    keys,
+  }
+}
+
+async function clearLoginAttemptState(req, identifier) {
+  const keys = buildLoginSecurityKeys(req, identifier)
+  await Promise.all([
+    deleteSecurityKey(keys.failByIdentifier),
+    deleteSecurityKey(keys.failByIp),
+    deleteSecurityKey(keys.lockByIdentifier),
+    deleteSecurityKey(keys.lockByIp),
+  ])
+}
+
+function setRetryAfterFromMs(res, ttlMs) {
+  const retryAfterSec = Math.max(1, Math.ceil(Math.max(0, ttlMs) / 1000))
+  res.setHeader('Retry-After', String(retryAfterSec))
+  return retryAfterSec
+}
+
+function verifyTotpForSecret(secret, code) {
+  const normalizedCode = normalizeTotpCode(code)
+  if (normalizedCode.length !== 6 || !safeString(secret)) return false
+
+  try {
+    return Boolean(totpAuthenticator.check(normalizedCode, secret))
+  } catch {
+    return false
+  }
+}
+
+function buildMfaHintFromUser(user) {
+  const maskedEmail = maskSecurityEmail(user?.email)
+  if (maskedEmail) return maskedEmail
+
+  const username = normalizeUsername(user?.username)
+  return username ? `@${username}` : 'cuenta protegida'
+}
+
+async function issueMfaLoginChallenge(user, req, source = 'password') {
+  const challengeId = nanoid()
+  const challengeKey = buildMfaLoginChallengeKey(challengeId)
+  const attemptsKey = buildMfaLoginChallengeAttemptsKey(challengeId)
+
+  await Promise.all([
+    setSecurityKeyWithTtl(challengeKey, user.id, AUTH_MFA_LOGIN_CHALLENGE_TTL_MS),
+    deleteSecurityKey(attemptsKey),
+  ])
+
+  const token = signMfaLoginChallengeToken(user.id, challengeId)
+
+  recordSecurityEvent('auth.mfa.login.challenge_issued', {
+    severity: 'low',
+    userId: user.id,
+    requestIp: getRequestIpAddress(req),
+    identifier: user.email || user.username,
+    details: {
+      challengeId,
+      source,
+      ttlMs: AUTH_MFA_LOGIN_CHALLENGE_TTL_MS,
+    },
+  })
+
+  return {
+    token,
+    challengeId,
+    hint: buildMfaHintFromUser(user),
+    expiresInSec: AUTH_MFA_LOGIN_CHALLENGE_EXPIRES_IN_SEC,
+  }
+}
+
+async function clearMfaLoginChallenge(challengeId) {
+  const normalized = safeString(challengeId)
+  if (!normalized) return
+
+  await Promise.all([
+    deleteSecurityKey(buildMfaLoginChallengeKey(normalized)),
+    deleteSecurityKey(buildMfaLoginChallengeAttemptsKey(normalized)),
+  ])
+}
+
+async function resolveMfaLoginChallengeFromToken(rawToken) {
+  const token = safeString(rawToken)
+  const payload = verifyMfaLoginChallengeToken(token)
+  if (!payload) {
+    return { ok: false, reason: 'token_invalid' }
+  }
+
+  const challengeKey = buildMfaLoginChallengeKey(payload.challengeId)
+  const [storedUserId, ttlMs] = await Promise.all([
+    getSecurityKeyValue(challengeKey),
+    getSecurityKeyTtlMs(challengeKey),
+  ])
+
+  if (!storedUserId || ttlMs <= 0) {
+    return { ok: false, reason: 'challenge_expired', challengeId: payload.challengeId, userId: payload.userId }
+  }
+
+  if (storedUserId !== payload.userId) {
+    return { ok: false, reason: 'challenge_mismatch', challengeId: payload.challengeId, userId: payload.userId }
+  }
+
+  return {
+    ok: true,
+    challengeId: payload.challengeId,
+    userId: payload.userId,
+    ttlMs,
+  }
+}
+
+function buildAuthSuccessPayload(user, accessToken) {
+  const payload = {
+    user: mapUserRow(user),
+  }
+
+  if (AUTH_EXPOSE_TOKEN_RESPONSE) {
+    payload.token = accessToken
+  }
+
+  return payload
+}
+
+async function respondWithAuthSuccessOrMfaChallenge(req, res, user, options = {}) {
+  if (hasUserMfaEnabled(user)) {
+    const mfaSecret = decryptMfaSecret(user.mfa_totp_secret_enc)
+
+    if (!mfaSecret) {
+      recordSecurityEvent('auth.mfa.login.secret_corrupted', {
+        severity: 'critical',
+        userId: user.id,
+        requestIp: getRequestIpAddress(req),
+        identifier: user.email || user.username,
+      })
+      sendError(res, 500, 'No se pudo validar la configuracion MFA de esta cuenta.')
+      return false
+    }
+
+    const challenge = await issueMfaLoginChallenge(user, req, options.source || 'password')
+    sendError(res, 401, 'Tu cuenta tiene MFA activo. Ingresa el codigo de tu app autenticadora.', {
+      errorCode: 'MFA_REQUIRED',
+      mfaMethod: 'totp',
+      mfaToken: challenge.token,
+      mfaExpiresInSec: challenge.expiresInSec,
+      mfaHint: challenge.hint,
+    })
+    return false
+  }
+
+  const session = issueAuthSessionForUser(user.id, req)
+  setAuthCookies(res, session.accessToken, session.refreshToken)
+
+  const payload = buildAuthSuccessPayload(user, session.accessToken)
+  const extraPayload = options.extraPayload && typeof options.extraPayload === 'object'
+    ? options.extraPayload
+    : null
+
+  res.json(extraPayload ? { ...payload, ...extraPayload } : payload)
+  return true
+}
+
+function issueAuthSessionForUser(userId, req, familyId = '') {
+  const refresh = issueRefreshTokenTx(
+    userId,
+    familyId,
+    getRequestIpAddress(req),
+    getRequestUserAgent(req),
+  )
+
+  return {
+    accessToken: signSessionToken(userId),
+    refreshToken: refresh.token,
+    refreshFamilyId: refresh.familyId,
+    refreshExpiresAt: refresh.expiresAt,
+  }
+}
+
+function revokeRefreshFamily(familyId) {
+  const normalizedFamilyId = safeString(familyId)
+  if (!normalizedFamilyId) return
+  revokeRefreshTokenFamilyStmt.run(nowIso(), normalizedFamilyId)
+}
+
+function resolveOptionalAuthUser(req) {
+  const token = getSessionTokenFromRequest(req)
   if (!token) return null
 
   const payload = verifySessionToken(token)
@@ -2816,6 +4078,10 @@ function mapUserRow(row) {
     emailVerified: Boolean(row.email_verified),
     avatarUrl: row.avatar_url || '',
     coverUrl: row.cover_url || '',
+    mfaEnabled: hasUserMfaEnabled(row),
+    mfaEnabledAt: row.mfa_enabled_at || '',
+    mfaLastUsedAt: row.mfa_last_used_at || '',
+    isSecurityAdmin: isSecurityAuditAdminUser(row),
     linkedProviders: listLinkedProviders(row.id),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -3146,7 +4412,7 @@ function mapPublicProfilePayload(row, viewerUserId = '') {
 }
 
 function signSessionToken(userId) {
-  return jwt.sign({ sub: userId }, AUTH_JWT_SECRET, { expiresIn: AUTH_JWT_EXPIRES_IN })
+  return jwt.sign({ sub: userId }, AUTH_JWT_SECRET, { expiresIn: AUTH_ACCESS_TOKEN_EXPIRES_IN })
 }
 
 function verifySessionToken(token) {
@@ -3482,6 +4748,7 @@ const uploadRecording = multer({
 })
 
 const app = express()
+app.disable('x-powered-by')
 
 if (TRUST_PROXY) {
   // Permite valores como "1", "true" o una lista de IPs/subredes de proxies de confianza.
@@ -3494,11 +4761,17 @@ app.use(
   }),
 )
 
-const corsOptions = ALLOWED_ORIGINS.length
+const corsOptions = ALLOWED_ORIGIN_SET.size
   ? {
       origin(origin, callback) {
         // Peticiones sin Origin (curl, apps nativas, same-origin) se permiten.
-        if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+        if (!origin) {
+          callback(null, true)
+          return
+        }
+
+        const normalizedOrigin = normalizeOriginValue(origin)
+        if (normalizedOrigin && ALLOWED_ORIGIN_SET.has(normalizedOrigin)) {
           callback(null, true)
           return
         }
@@ -3507,49 +4780,133 @@ const corsOptions = ALLOWED_ORIGINS.length
       },
       credentials: true,
     }
-  : {}
-
-app.use(cors(corsOptions))
-app.use(express.json({ limit: '2mb' }))
-app.use('/uploads', express.static(UPLOADS_DIR))
-
-/**
- * Limitador de peticiones en memoria (sin dependencias externas).
- * Suficiente para una sola instancia; en multi-instancia usar un store compartido.
- */
-function createRateLimiter({ windowMs, max, message }) {
-  const hits = new Map()
-
-  const sweep = setInterval(() => {
-    const now = Date.now()
-    for (const [key, entry] of hits.entries()) {
-      if (now > entry.resetAt) hits.delete(key)
+  : {
+      // En desarrollo se permite cualquier origen para facilitar pruebas;
+      // en produccion sin allowlist activa solo same-origin/no-origin.
+      origin: !IS_PRODUCTION,
+      credentials: true,
     }
-  }, Math.max(windowMs, 30_000))
 
-  if (typeof sweep.unref === 'function') sweep.unref()
+function resolveRequestOrigin(req) {
+  const protocol = safeString(req.protocol).toLowerCase()
+  const host = safeString(req.headers.host).toLowerCase()
+  if (!protocol || !host) return ''
+  return `${protocol}://${host}`
+}
 
-  return function rateLimiter(req, res, next) {
-    const key = req.ip || req.socket?.remoteAddress || 'unknown'
-    const now = Date.now()
-    const entry = hits.get(key)
+function requireTrustedOriginForCookieSession(req, res, next) {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+    next()
+    return
+  }
 
-    if (!entry || now > entry.resetAt) {
-      hits.set(key, { count: 1, resetAt: now + windowMs })
+  const hasCookieSession = Boolean(getAccessTokenFromCookie(req) || getRefreshTokenFromRequest(req))
+  if (!hasCookieSession) {
+    next()
+    return
+  }
+
+  const origin = safeString(req.headers.origin)
+  if (!origin) {
+    next()
+    return
+  }
+
+  const normalizedOrigin = normalizeOriginValue(origin)
+  if (!normalizedOrigin) {
+    recordSecurityEvent('auth.csrf.origin_invalid', {
+      severity: 'high',
+      requestIp: getRequestIpAddress(req),
+      identifier: origin,
+      details: { method: req.method, path: req.path },
+    })
+    sendError(res, 403, 'Origen invalido para esta sesion.')
+    return
+  }
+
+  if (ALLOWED_ORIGIN_SET.size > 0) {
+    if (ALLOWED_ORIGIN_SET.has(normalizedOrigin)) {
       next()
       return
     }
 
-    entry.count += 1
+    recordSecurityEvent('auth.csrf.origin_blocked', {
+      severity: 'high',
+      requestIp: getRequestIpAddress(req),
+      identifier: normalizedOrigin,
+      details: { method: req.method, path: req.path },
+    })
+    sendError(res, 403, 'Origen no permitido para operar la sesion.')
+    return
+  }
 
-    if (entry.count > max) {
-      const retryAfterSec = Math.max(1, Math.ceil((entry.resetAt - now) / 1000))
-      res.setHeader('Retry-After', String(retryAfterSec))
-      sendError(res, 429, message || 'Demasiadas solicitudes. Intenta mas tarde.')
-      return
-    }
-
+  if (!IS_PRODUCTION) {
     next()
+    return
+  }
+
+  if (normalizedOrigin === resolveRequestOrigin(req)) {
+    next()
+    return
+  }
+
+  recordSecurityEvent('auth.csrf.origin_blocked', {
+    severity: 'high',
+    requestIp: getRequestIpAddress(req),
+    identifier: normalizedOrigin,
+    details: { method: req.method, path: req.path, mode: 'same-origin' },
+  })
+  sendError(res, 403, 'Origen no permitido para operar la sesion.')
+}
+
+app.use(cors(corsOptions))
+app.use(express.json({ limit: '2mb' }))
+app.use('/uploads', express.static(UPLOADS_DIR))
+app.use(requireTrustedOriginForCookieSession)
+
+/**
+ * Limitador de peticiones con backend Redis opcional y fallback local.
+ * Si Redis no está disponible, mantiene disponibilidad usando memoria.
+ */
+function createRateLimiter({ windowMs, max, message, namespace = 'default', keyResolver }) {
+  const normalizedWindowMs = Math.max(1_000, Number(windowMs) || 60_000)
+  const normalizedMax = Math.max(1, Number(max) || 30)
+
+  return async function rateLimiter(req, res, next) {
+    try {
+      const scopeRaw =
+        typeof keyResolver === 'function'
+          ? keyResolver(req)
+          : (getRequestIpAddress(req) || 'unknown')
+      const scope = safeString(scopeRaw).toLowerCase().slice(0, 140) || 'unknown'
+      const key = buildSecurityStoreKey('ratelimit', namespace, scope)
+      const hit = await incrementSecurityCounter(key, normalizedWindowMs)
+
+      if (hit.count > normalizedMax) {
+        setRetryAfterFromMs(res, hit.ttlMs)
+        recordSecurityEvent('auth.ratelimit.blocked', {
+          severity: 'medium',
+          userId: req.authUser?.id || '',
+          requestIp: getRequestIpAddress(req),
+          identifier: scope,
+          details: {
+            namespace,
+            max: normalizedMax,
+            count: hit.count,
+            backend: hit.backend,
+            method: req.method,
+            path: req.path,
+          },
+        })
+        sendError(res, 429, message || 'Demasiadas solicitudes. Intenta mas tarde.')
+        return
+      }
+
+      next()
+    } catch (error) {
+      console.error('[seguridad] Error en rate limiter, se permite la peticion por disponibilidad:', error instanceof Error ? error.message : error)
+      next()
+    }
   }
 }
 
@@ -3557,29 +4914,37 @@ const authRateLimiter = createRateLimiter({
   windowMs: Number.parseInt(process.env.AUTH_RATE_LIMIT_WINDOW_MS ?? '', 10) || 15 * 60 * 1000,
   max: Number.parseInt(process.env.AUTH_RATE_LIMIT_MAX ?? '', 10) || 40,
   message: 'Demasiados intentos de autenticacion. Espera unos minutos e intenta de nuevo.',
+  namespace: 'auth',
 })
 
 const liveChatRateLimiter = createRateLimiter({
   windowMs: 60 * 1000,
   max: 40,
   message: 'Estás enviando mensajes muy rápido. Espera un momento.',
+  namespace: 'live-chat',
+  keyResolver(req) {
+    return req.authUser?.id || getRequestIpAddress(req)
+  },
 })
 
 const liveLikesRateLimiter = createRateLimiter({
   windowMs: 60 * 1000,
   max: 240,
   message: 'Demasiados likes seguidos. Espera un momento.',
+  namespace: 'live-likes',
+  keyResolver(req) {
+    return req.authUser?.id || getRequestIpAddress(req)
+  },
 })
 
 function requireAuth(req, res, next) {
-  const authorization = typeof req.headers.authorization === 'string' ? req.headers.authorization : ''
+  const token = getSessionTokenFromRequest(req)
 
-  if (!authorization.startsWith('Bearer ')) {
+  if (!token) {
     sendError(res, 401, 'Debes iniciar sesion para continuar.')
     return
   }
 
-  const token = authorization.slice('Bearer '.length).trim()
   const payload = verifySessionToken(token)
   const userId = typeof payload?.sub === 'string' ? payload.sub : ''
 
@@ -3680,6 +5045,18 @@ app.get('/api/auth/providers', (req, res) => {
   })
 })
 
+function mapUserUniqueConstraintToMessage(error) {
+  const message = error instanceof Error ? error.message : ''
+
+  if (!message.includes('SQLITE_CONSTRAINT') || !message.includes('UNIQUE constraint failed')) {
+    return ''
+  }
+
+  if (message.includes('users.email')) return 'Ese correo ya esta registrado.'
+  if (message.includes('users.username')) return 'Ese usuario ya existe.'
+  return 'Ya existe una cuenta con esos datos.'
+}
+
 app.post('/api/auth/register', authRateLimiter, async (req, res) => {
   const email = normalizeEmail(req.body?.email)
   const username = normalizeUsername(req.body?.username)
@@ -3716,63 +5093,116 @@ app.post('/api/auth/register', authRateLimiter, async (req, res) => {
     return
   }
 
-  const passwordHash = await bcrypt.hash(password, 10)
+  const passwordHash = await bcrypt.hash(password, AUTH_PASSWORD_HASH_ROUNDS)
   const userId = nanoid()
   const now = nowIso()
 
-  insertUserStmt.run(
-    userId,
-    email,
-    username,
-    displayName,
-    passwordHash,
-    '',
-    '',
-    0,
-    '',
-    '',
-    now,
-    now,
-  )
+  try {
+    insertUserStmt.run(
+      userId,
+      email,
+      username,
+      displayName,
+      passwordHash,
+      '',
+      '',
+      0,
+      '',
+      '',
+      now,
+      now,
+    )
 
-  const user = selectUserByIdStmt.get(userId)
-  const verification = await issueVerificationCode(user)
+    const user = selectUserByIdStmt.get(userId)
+    if (!user) {
+      sendError(res, 500, 'No se pudo crear la cuenta. Intenta de nuevo.')
+      return
+    }
 
-  res.status(201).json({
-    requiresEmailVerification: true,
-    email,
-    verificationSent: verification.sent,
-    debugVerificationCode: verification.debugVerificationCode,
-    message: 'Te enviamos un codigo de verificacion. Debes verificar tu correo antes de iniciar sesion.',
-  })
+    const verification = await issueVerificationCode(user)
+
+    res.status(201).json({
+      requiresEmailVerification: true,
+      email,
+      verificationSent: verification.sent,
+      debugVerificationCode: verification.debugVerificationCode,
+      message: 'Te enviamos un codigo de verificacion. Debes verificar tu correo antes de iniciar sesion.',
+    })
+  } catch (error) {
+    const conflictMessage = mapUserUniqueConstraintToMessage(error)
+    if (conflictMessage) {
+      sendError(res, 409, conflictMessage)
+      return
+    }
+
+    console.error('[auth/register] error creando usuario:', error instanceof Error ? error.message : error)
+    sendError(res, 500, 'No se pudo crear la cuenta. Intenta de nuevo.')
+  }
 })
 
 app.post('/api/auth/login', authRateLimiter, async (req, res) => {
   const identifier = normalizeEmail(req.body?.identifier)
   const password = safeString(req.body?.password)
 
+  const respondLocked = (lockMs, reason) => {
+    setRetryAfterFromMs(res, lockMs)
+    recordSecurityEvent('auth.login.lock_precheck_blocked', {
+      severity: 'high',
+      requestIp: getRequestIpAddress(req),
+      identifier,
+      details: {
+        reason,
+        lockMs,
+      },
+    })
+    sendError(res, 429, 'Demasiados intentos de acceso. Espera un momento e intenta otra vez.')
+  }
+
   if (!identifier || !password) {
     sendError(res, 400, 'Completa usuario/correo y clave.')
+    return
+  }
+
+  const precheck = await readLoginLockStatus(req, identifier)
+  if (precheck.locked) {
+    respondLocked(precheck.lockMs, 'precheck')
     return
   }
 
   const user = selectUserForLoginStmt.get(identifier, identifier)
 
   if (!user) {
+    const failed = await registerFailedLoginAttempt(req, identifier, 'user_not_found')
+    if (failed.locked) {
+      respondLocked(failed.lockMs, 'failed_identity')
+      return
+    }
     sendError(res, 401, 'Credenciales invalidas.')
     return
   }
 
   if (!isBcryptHash(user.password_hash)) {
+    const failed = await registerFailedLoginAttempt(req, identifier, 'social_account_password_attempt')
+    if (failed.locked) {
+      respondLocked(failed.lockMs, 'failed_identity')
+      return
+    }
     sendError(res, 401, 'Esta cuenta usa acceso social. Continua con Google o Apple.')
     return
   }
 
   const isPasswordValid = await bcrypt.compare(password, user.password_hash)
   if (!isPasswordValid) {
+    const failed = await registerFailedLoginAttempt(req, identifier, 'invalid_password')
+    if (failed.locked) {
+      respondLocked(failed.lockMs, 'failed_password')
+      return
+    }
     sendError(res, 401, 'Credenciales invalidas.')
     return
   }
+
+  await clearLoginAttemptState(req, identifier)
 
   if (!user.email_verified) {
     const verification = await issueVerificationCode(user)
@@ -3786,15 +5216,12 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
     return
   }
 
-  const token = signSessionToken(user.id)
-
-  res.json({
-    token,
-    user: mapUserRow(user),
+  await respondWithAuthSuccessOrMfaChallenge(req, res, user, {
+    source: 'password',
   })
 })
 
-app.post('/api/auth/verify-email', authRateLimiter, (req, res) => {
+app.post('/api/auth/verify-email', authRateLimiter, async (req, res) => {
   const email = normalizeEmail(req.body?.email)
   const code = normalizeVerificationCode(req.body?.code)
 
@@ -3815,11 +5242,11 @@ app.post('/api/auth/verify-email', authRateLimiter, (req, res) => {
   }
 
   if (user.email_verified) {
-    const token = signSessionToken(user.id)
-    res.json({
-      token,
-      user: mapUserRow(user),
-      verified: true,
+    await respondWithAuthSuccessOrMfaChallenge(req, res, user, {
+      source: 'email_verify_existing',
+      extraPayload: {
+        verified: true,
+      },
     })
     return
   }
@@ -3853,12 +5280,11 @@ app.post('/api/auth/verify-email', authRateLimiter, (req, res) => {
   markUserEmailVerifiedStmt.run(consumedAt, user.id)
 
   const verifiedUser = selectUserByIdStmt.get(user.id)
-  const token = signSessionToken(verifiedUser.id)
-
-  res.json({
-    token,
-    user: mapUserRow(verifiedUser),
-    verified: true,
+  await respondWithAuthSuccessOrMfaChallenge(req, res, verifiedUser, {
+    source: 'email_verify_new',
+    extraPayload: {
+      verified: true,
+    },
   })
 })
 
@@ -3906,14 +5332,19 @@ app.post('/api/auth/oauth/google', authRateLimiter, async (req, res) => {
   try {
     const profile = await verifyGoogleIdToken(idToken)
     const user = upsertSocialUserTx(profile)
-    const token = signSessionToken(user.id)
-
-    res.json({
-      token,
-      user: mapUserRow(user),
-      provider: 'google',
+    await respondWithAuthSuccessOrMfaChallenge(req, res, user, {
+      source: 'oauth_google',
+      extraPayload: {
+        provider: 'google',
+      },
     })
   } catch (error) {
+    const conflictMessage = mapUserUniqueConstraintToMessage(error)
+    if (conflictMessage) {
+      sendError(res, 409, conflictMessage)
+      return
+    }
+
     const message = error instanceof Error ? error.message : 'No se pudo iniciar sesion con Google.'
     sendError(res, 401, message)
   }
@@ -3942,22 +5373,536 @@ app.post('/api/auth/oauth/apple', authRateLimiter, async (req, res) => {
       avatarUrl: '',
     })
 
-    const token = signSessionToken(user.id)
-
-    res.json({
-      token,
-      user: mapUserRow(user),
-      provider: 'apple',
+    await respondWithAuthSuccessOrMfaChallenge(req, res, user, {
+      source: 'oauth_apple',
+      extraPayload: {
+        provider: 'apple',
+      },
     })
   } catch (error) {
+    const conflictMessage = mapUserUniqueConstraintToMessage(error)
+    if (conflictMessage) {
+      sendError(res, 409, conflictMessage)
+      return
+    }
+
     const message = error instanceof Error ? error.message : 'No se pudo iniciar sesion con Apple.'
     sendError(res, 401, message)
   }
 })
 
+app.post('/api/auth/mfa/verify-login', authRateLimiter, async (req, res) => {
+  const mfaToken = safeString(req.body?.mfaToken)
+  const code = normalizeTotpCode(req.body?.code)
+
+  if (!mfaToken || code.length !== 6) {
+    sendError(res, 400, 'Debes indicar el codigo MFA de 6 digitos.', {
+      errorCode: 'MFA_CODE_REQUIRED',
+    })
+    return
+  }
+
+  const challenge = await resolveMfaLoginChallengeFromToken(mfaToken)
+  if (!challenge.ok) {
+    if (challenge.challengeId) {
+      await clearMfaLoginChallenge(challenge.challengeId)
+    }
+
+    recordSecurityEvent('auth.mfa.login.challenge_invalid', {
+      severity: 'medium',
+      userId: challenge.userId || '',
+      requestIp: getRequestIpAddress(req),
+      identifier: challenge.challengeId || '',
+      details: {
+        reason: challenge.reason,
+      },
+    })
+
+    sendError(res, 401, 'El desafio MFA ya no es valido. Inicia sesion nuevamente.', {
+      errorCode: 'MFA_CHALLENGE_INVALID',
+    })
+    return
+  }
+
+  const user = selectUserByIdStmt.get(challenge.userId)
+  if (!user || !user.email_verified) {
+    await clearMfaLoginChallenge(challenge.challengeId)
+    recordSecurityEvent('auth.mfa.login.user_invalid', {
+      severity: 'high',
+      userId: challenge.userId,
+      requestIp: getRequestIpAddress(req),
+      identifier: challenge.challengeId,
+      details: {
+        hasUser: Boolean(user),
+        emailVerified: Boolean(user?.email_verified),
+      },
+    })
+    clearAuthCookies(res)
+    sendError(res, 401, 'La sesion de acceso ya no es valida. Inicia sesion otra vez.')
+    return
+  }
+
+  if (!hasUserMfaEnabled(user)) {
+    await clearMfaLoginChallenge(challenge.challengeId)
+    const session = issueAuthSessionForUser(user.id, req)
+    setAuthCookies(res, session.accessToken, session.refreshToken)
+    res.json(buildAuthSuccessPayload(user, session.accessToken))
+    return
+  }
+
+  const mfaSecret = decryptMfaSecret(user.mfa_totp_secret_enc)
+  if (!mfaSecret) {
+    await clearMfaLoginChallenge(challenge.challengeId)
+    recordSecurityEvent('auth.mfa.login.secret_corrupted', {
+      severity: 'critical',
+      userId: user.id,
+      requestIp: getRequestIpAddress(req),
+      identifier: challenge.challengeId,
+    })
+    sendError(res, 500, 'No se pudo validar la configuracion MFA de esta cuenta.')
+    return
+  }
+
+  if (!verifyTotpForSecret(mfaSecret, code)) {
+    const attempts = await incrementSecurityCounter(
+      buildMfaLoginChallengeAttemptsKey(challenge.challengeId),
+      Math.max(1_000, challenge.ttlMs),
+    )
+    const attemptsRemaining = Math.max(0, AUTH_MFA_LOGIN_MAX_ATTEMPTS - attempts.count)
+
+    if (attempts.count >= AUTH_MFA_LOGIN_MAX_ATTEMPTS) {
+      await clearMfaLoginChallenge(challenge.challengeId)
+      setRetryAfterFromMs(res, challenge.ttlMs)
+      recordSecurityEvent('auth.mfa.login.locked', {
+        severity: 'high',
+        userId: user.id,
+        requestIp: getRequestIpAddress(req),
+        identifier: challenge.challengeId,
+        details: {
+          attempts: attempts.count,
+          maxAttempts: AUTH_MFA_LOGIN_MAX_ATTEMPTS,
+        },
+      })
+      sendError(res, 429, 'Demasiados intentos de MFA. Inicia sesion de nuevo.', {
+        errorCode: 'MFA_TOO_MANY_ATTEMPTS',
+      })
+      return
+    }
+
+    recordSecurityEvent('auth.mfa.login.invalid_code', {
+      severity: 'medium',
+      userId: user.id,
+      requestIp: getRequestIpAddress(req),
+      identifier: challenge.challengeId,
+      details: {
+        attempts: attempts.count,
+        attemptsRemaining,
+      },
+    })
+
+    sendError(res, 401, 'Codigo MFA invalido. Intenta de nuevo.', {
+      errorCode: 'MFA_INVALID',
+      attemptsRemaining,
+    })
+    return
+  }
+
+  await clearMfaLoginChallenge(challenge.challengeId)
+
+  const usedAt = nowIso()
+  markUserMfaLastUsedStmt.run(usedAt, user.id)
+  const refreshedUser = selectUserByIdStmt.get(user.id) || user
+
+  recordSecurityEvent('auth.mfa.login.verified', {
+    severity: 'low',
+    userId: user.id,
+    requestIp: getRequestIpAddress(req),
+    identifier: challenge.challengeId,
+  })
+
+  const session = issueAuthSessionForUser(user.id, req)
+  setAuthCookies(res, session.accessToken, session.refreshToken)
+  res.json(buildAuthSuccessPayload(refreshedUser, session.accessToken))
+})
+
+app.post('/api/auth/session/exchange', authRateLimiter, requireAuth, (req, res) => {
+  const session = issueAuthSessionForUser(req.authUser.id, req)
+  setAuthCookies(res, session.accessToken, session.refreshToken)
+
+  res.json(buildAuthSuccessPayload(req.authUser, session.accessToken))
+})
+
+app.post('/api/auth/refresh', authRateLimiter, (req, res) => {
+  const refreshToken = getRefreshTokenFromRequest(req)
+  const requestIp = getRequestIpAddress(req)
+  if (!refreshToken) {
+    recordSecurityEvent('auth.refresh.missing_cookie', {
+      severity: 'low',
+      requestIp,
+      details: { path: req.path },
+    })
+    clearAuthCookies(res)
+    sendError(res, 401, 'La sesion expiro. Inicia sesion nuevamente.')
+    return
+  }
+
+  const tokenHash = hashRefreshToken(refreshToken)
+  const tokenRow = selectRefreshTokenByHashStmt.get(tokenHash)
+
+  if (!tokenRow) {
+    recordSecurityEvent('auth.refresh.unknown_token', {
+      severity: 'medium',
+      requestIp,
+      details: { path: req.path },
+    })
+    clearAuthCookies(res)
+    sendError(res, 401, 'La sesion expiro. Inicia sesion nuevamente.')
+    return
+  }
+
+  if (tokenRow.revoked_at || isExpired(tokenRow.expires_at)) {
+    recordSecurityEvent('auth.refresh.revoked_or_expired', {
+      severity: 'medium',
+      userId: tokenRow.user_id,
+      requestIp,
+      identifier: tokenRow.family_id,
+      details: {
+        revoked: Boolean(tokenRow.revoked_at),
+        expired: isExpired(tokenRow.expires_at),
+      },
+    })
+    revokeRefreshFamily(tokenRow.family_id)
+    clearAuthCookies(res)
+    sendError(res, 401, 'La sesion expiro. Inicia sesion nuevamente.')
+    return
+  }
+
+  if (tokenRow.consumed_at) {
+    recordSecurityEvent('auth.refresh.replay_detected', {
+      severity: 'critical',
+      userId: tokenRow.user_id,
+      requestIp,
+      identifier: tokenRow.family_id,
+      details: { consumedAt: tokenRow.consumed_at },
+    })
+    revokeRefreshFamily(tokenRow.family_id)
+    clearAuthCookies(res)
+    sendError(res, 401, 'Se detecto un intento de reutilizacion de sesion. Inicia sesion de nuevo.')
+    return
+  }
+
+  const user = selectUserByIdStmt.get(tokenRow.user_id)
+  if (!user || !user.email_verified) {
+    recordSecurityEvent('auth.refresh.user_invalid', {
+      severity: 'high',
+      userId: tokenRow.user_id,
+      requestIp,
+      identifier: tokenRow.family_id,
+      details: { hasUser: Boolean(user), emailVerified: Boolean(user?.email_verified) },
+    })
+    revokeRefreshTokenByIdStmt.run(nowIso(), tokenRow.id)
+    clearAuthCookies(res)
+    sendError(res, 401, 'La sesion ya no es valida.')
+    return
+  }
+
+  try {
+    const rotated = rotateRefreshTokenTx(
+      tokenRow.id,
+      tokenRow.user_id,
+      tokenRow.family_id,
+      getRequestIpAddress(req),
+      getRequestUserAgent(req),
+    )
+
+    const accessToken = signSessionToken(user.id)
+    setAuthCookies(res, accessToken, rotated.token)
+    res.json(buildAuthSuccessPayload(user, accessToken))
+  } catch {
+    recordSecurityEvent('auth.refresh.rotation_failed', {
+      severity: 'high',
+      userId: tokenRow.user_id,
+      requestIp,
+      identifier: tokenRow.family_id,
+      details: { tokenId: tokenRow.id },
+    })
+    revokeRefreshFamily(tokenRow.family_id)
+    clearAuthCookies(res)
+    sendError(res, 401, 'La sesion ya no es valida. Inicia sesion otra vez.')
+  }
+})
+
+app.post('/api/auth/logout', (req, res) => {
+  const refreshToken = getRefreshTokenFromRequest(req)
+  const now = nowIso()
+  const requestIp = getRequestIpAddress(req)
+
+  if (refreshToken) {
+    const tokenRow = selectRefreshTokenByHashStmt.get(hashRefreshToken(refreshToken))
+    if (tokenRow?.family_id) {
+      recordSecurityEvent('auth.logout.revoke_family', {
+        severity: 'low',
+        userId: tokenRow.user_id,
+        requestIp,
+        identifier: tokenRow.family_id,
+      })
+      revokeRefreshTokenFamilyStmt.run(now, tokenRow.family_id)
+    }
+  }
+
+  const authUser = resolveOptionalAuthUser(req)
+  if (authUser?.id) {
+    revokeRefreshTokensByUserStmt.run(now, authUser.id)
+  }
+
+  clearAuthCookies(res)
+  res.json({ ok: true })
+})
+
 app.get('/api/auth/me', requireAuth, (req, res) => {
   res.json({
     user: mapUserRow(req.authUser),
+  })
+})
+
+app.get('/api/auth/mfa/status', requireAuth, (req, res) => {
+  const user = selectUserByIdStmt.get(req.authUser.id) || req.authUser
+
+  res.json({
+    mfaEnabled: hasUserMfaEnabled(user),
+    mfaEnabledAt: user.mfa_enabled_at || '',
+    mfaLastUsedAt: user.mfa_last_used_at || '',
+  })
+})
+
+app.post('/api/auth/mfa/setup', authRateLimiter, requireAuth, (req, res) => {
+  if (hasUserMfaEnabled(req.authUser)) {
+    sendError(res, 409, 'MFA ya esta activo para esta cuenta.', {
+      errorCode: 'MFA_ALREADY_ENABLED',
+    })
+    return
+  }
+
+  const secret = totpAuthenticator.generateSecret()
+  const accountName = normalizeEmail(req.authUser.email) || normalizeUsername(req.authUser.username) || req.authUser.id
+  const otpauthUrl = totpAuthenticator.keyuri(accountName, AUTH_MFA_TOTP_ISSUER, secret)
+  const setupToken = signMfaSetupToken(req.authUser.id, secret)
+
+  recordSecurityEvent('auth.mfa.setup.started', {
+    severity: 'low',
+    userId: req.authUser.id,
+    requestIp: getRequestIpAddress(req),
+    identifier: req.authUser.email || req.authUser.username,
+  })
+
+  res.json({
+    setupToken,
+    secret,
+    otpauthUrl,
+    issuer: AUTH_MFA_TOTP_ISSUER,
+    accountName,
+    digits: 6,
+    period: 30,
+  })
+})
+
+app.post('/api/auth/mfa/enable', authRateLimiter, requireAuth, (req, res) => {
+  const setupToken = safeString(req.body?.setupToken)
+  const code = normalizeTotpCode(req.body?.code)
+
+  if (!setupToken || code.length !== 6) {
+    sendError(res, 400, 'Debes confirmar el token de setup y un codigo MFA valido.', {
+      errorCode: 'MFA_SETUP_INPUT_REQUIRED',
+    })
+    return
+  }
+
+  if (hasUserMfaEnabled(req.authUser)) {
+    sendError(res, 409, 'MFA ya esta activo para esta cuenta.', {
+      errorCode: 'MFA_ALREADY_ENABLED',
+    })
+    return
+  }
+
+  const setupPayload = verifyMfaSetupToken(setupToken)
+  if (!setupPayload || setupPayload.userId !== req.authUser.id) {
+    sendError(res, 401, 'El setup MFA ya no es valido. Genera uno nuevo.', {
+      errorCode: 'MFA_SETUP_TOKEN_INVALID',
+    })
+    return
+  }
+
+  if (!verifyTotpForSecret(setupPayload.secret, code)) {
+    recordSecurityEvent('auth.mfa.setup.invalid_code', {
+      severity: 'medium',
+      userId: req.authUser.id,
+      requestIp: getRequestIpAddress(req),
+      identifier: req.authUser.email || req.authUser.username,
+    })
+    sendError(res, 400, 'Codigo MFA invalido. Revisa tu app autenticadora.', {
+      errorCode: 'MFA_INVALID',
+    })
+    return
+  }
+
+  const encryptedSecret = encryptMfaSecret(setupPayload.secret)
+  if (!encryptedSecret) {
+    sendError(res, 500, 'No se pudo guardar la configuracion MFA.')
+    return
+  }
+
+  const now = nowIso()
+  updateUserMfaStateStmt.run(encryptedSecret, 1, now, now, now, req.authUser.id)
+  revokeRefreshTokensByUserStmt.run(now, req.authUser.id)
+
+  const session = issueAuthSessionForUser(req.authUser.id, req)
+  setAuthCookies(res, session.accessToken, session.refreshToken)
+
+  const updatedUser = selectUserByIdStmt.get(req.authUser.id)
+  recordSecurityEvent('auth.mfa.enabled', {
+    severity: 'high',
+    userId: req.authUser.id,
+    requestIp: getRequestIpAddress(req),
+    identifier: req.authUser.email || req.authUser.username,
+  })
+
+  res.json({
+    ...buildAuthSuccessPayload(updatedUser, session.accessToken),
+    mfaEnabled: true,
+  })
+})
+
+app.post('/api/auth/mfa/disable', authRateLimiter, requireAuth, (req, res) => {
+  const currentUser = selectUserByIdStmt.get(req.authUser.id) || req.authUser
+
+  if (!hasUserMfaEnabled(currentUser)) {
+    res.json({
+      user: mapUserRow(currentUser),
+      mfaEnabled: false,
+    })
+    return
+  }
+
+  const code = normalizeTotpCode(req.body?.code)
+  if (code.length !== 6) {
+    sendError(res, 400, 'Debes indicar el codigo MFA actual para desactivar.', {
+      errorCode: 'MFA_CODE_REQUIRED',
+    })
+    return
+  }
+
+  const mfaSecret = decryptMfaSecret(currentUser.mfa_totp_secret_enc)
+  if (!mfaSecret) {
+    recordSecurityEvent('auth.mfa.disable.secret_corrupted', {
+      severity: 'critical',
+      userId: currentUser.id,
+      requestIp: getRequestIpAddress(req),
+      identifier: currentUser.email || currentUser.username,
+    })
+    sendError(res, 500, 'No se pudo validar la configuracion MFA actual.')
+    return
+  }
+
+  if (!verifyTotpForSecret(mfaSecret, code)) {
+    recordSecurityEvent('auth.mfa.disable.invalid_code', {
+      severity: 'high',
+      userId: currentUser.id,
+      requestIp: getRequestIpAddress(req),
+      identifier: currentUser.email || currentUser.username,
+    })
+    sendError(res, 401, 'Codigo MFA invalido.', {
+      errorCode: 'MFA_INVALID',
+    })
+    return
+  }
+
+  const now = nowIso()
+  updateUserMfaStateStmt.run('', 0, '', '', now, currentUser.id)
+  revokeRefreshTokensByUserStmt.run(now, currentUser.id)
+
+  const session = issueAuthSessionForUser(currentUser.id, req)
+  setAuthCookies(res, session.accessToken, session.refreshToken)
+  const updatedUser = selectUserByIdStmt.get(currentUser.id)
+
+  recordSecurityEvent('auth.mfa.disabled', {
+    severity: 'high',
+    userId: currentUser.id,
+    requestIp: getRequestIpAddress(req),
+    identifier: currentUser.email || currentUser.username,
+  })
+
+  res.json({
+    ...buildAuthSuccessPayload(updatedUser, session.accessToken),
+    mfaEnabled: false,
+  })
+})
+
+app.get('/api/security/audit-events', requireAuth, (req, res) => {
+  if (!isSecurityAuditAdminUser(req.authUser)) {
+    recordSecurityEvent('auth.audit.read_denied', {
+      severity: 'high',
+      userId: req.authUser.id,
+      requestIp: getRequestIpAddress(req),
+      identifier: req.authUser.username || req.authUser.email,
+    })
+    sendError(res, 403, 'No tienes permisos para leer la auditoria de seguridad.')
+    return
+  }
+
+  const limitRaw = Number.parseInt(String(req.query?.limit ?? ''), 10)
+  const daysRaw = Number.parseInt(String(req.query?.days ?? ''), 10)
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50
+  const days = Number.isFinite(daysRaw) ? Math.max(1, Math.min(90, daysRaw)) : 14
+  const severityInput = safeString(req.query?.severity).toLowerCase()
+  const severityFilter = ['low', 'medium', 'high', 'critical'].includes(severityInput) ? severityInput : ''
+  const eventTypeRaw = safeString(req.query?.eventType)
+  const eventTypeFilter = eventTypeRaw ? sanitizeSecurityEventType(eventTypeRaw) : ''
+  const identifierFilter = toSafeAuthIdentifier(req.query?.identifier)
+  const scanLimit = Math.max(limit, Math.min(1000, limit * 4))
+
+  let items = listSecurityAuditEventsStmt
+    .all(addDaysIso(-days), scanLimit)
+    .map((row) => mapSecurityAuditEventRow(row))
+    .filter(Boolean)
+
+  if (severityFilter) {
+    items = items.filter((item) => item.severity === severityFilter)
+  }
+
+  if (eventTypeFilter) {
+    items = items.filter((item) => item.eventType === eventTypeFilter)
+  }
+
+  if (identifierFilter) {
+    items = items.filter((item) => item.identifier.includes(identifierFilter))
+  }
+
+  items = items.slice(0, limit)
+
+  recordSecurityEvent('auth.audit.read', {
+    severity: 'low',
+    userId: req.authUser.id,
+    requestIp: getRequestIpAddress(req),
+    details: {
+      count: items.length,
+      limit,
+      days,
+      severity: severityFilter || 'all',
+      eventType: eventTypeFilter || 'all',
+      identifierFiltered: Boolean(identifierFilter),
+    },
+  })
+
+  res.json({
+    items,
+    filters: {
+      limit,
+      days,
+      severity: severityFilter || 'all',
+      eventType: eventTypeFilter || 'all',
+      identifier: identifierFilter || '',
+    },
+    generatedAt: nowIso(),
   })
 })
 

@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { getCurrentUserMetrics } from '../services/authApi'
+import { getCurrentUserMetrics, getSecurityAuditEvents } from '../services/authApi'
 import {
   getBotsStatus,
   reimportBotsMedia,
@@ -262,13 +262,14 @@ function normalizeCoverImageFile(file, targetWidth = COVER_IMAGE_WIDTH, targetHe
   })
 }
 
-const profileTabs = ['Publicaciones', 'Historias', 'Denuncias', 'Guardado']
+const profileTabs = ['Publicaciones', 'Historias', 'Denuncias', 'Guardado', 'Seguridad']
 
 const profileTabsLabels = {
   Publicaciones: { empty: 'Aún no has subido publicaciones. Usa el botón + para crear la primera.' },
   Historias: { empty: 'Aún no tienes historias publicadas.' },
   Denuncias: { empty: 'No se detectaron denuncias en tus publicaciones todavía.' },
   Guardado: { empty: 'Aún no tienes grabaciones. Haz un en vivo y se guardará aquí automáticamente.' },
+  Seguridad: { empty: '' },
 }
 
 const TILE_VIDEO_RE = /\.(mp4|webm|mov|m4v)(\?|$)/i
@@ -295,6 +296,29 @@ function formatCount(value) {
 function formatDuration(seconds) {
   const s = Math.max(0, Math.round(Number(seconds) || 0))
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+/** @param {unknown} value */
+function formatDateTime(value) {
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return '--'
+
+  return date.toLocaleString('es-VE', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  })
+}
+
+/** @param {unknown} details */
+function summarizeAuditDetails(details) {
+  if (!details || typeof details !== 'object') return ''
+
+  try {
+    const serialized = JSON.stringify(details)
+    return serialized.length > 220 ? `${serialized.slice(0, 220)}...` : serialized
+  } catch {
+    return ''
+  }
 }
 
 function classifyTileMedia(mediaUrl, mediaType) {
@@ -415,6 +439,9 @@ export default function PerfilPage({ posts }) {
     updateProfile,
     updateAvatar,
     updateCover,
+    requestMfaSetup,
+    enableMfaForCurrentUser,
+    disableMfaForCurrentUser,
     logout,
     isAuthBusy,
     authError,
@@ -482,6 +509,17 @@ export default function PerfilPage({ posts }) {
   const [botsMessage, setBotsMessage] = useState('')
   const [botsError, setBotsError] = useState('')
   const [isBotsBusy, setIsBotsBusy] = useState(false)
+  const [mfaSetupPayload, setMfaSetupPayload] = useState(null)
+  const [mfaEnableCode, setMfaEnableCode] = useState('')
+  const [mfaDisableCode, setMfaDisableCode] = useState('')
+  const [securityStatus, setSecurityStatus] = useState('')
+  const [securityError, setSecurityError] = useState('')
+  const [auditEvents, setAuditEvents] = useState([])
+  const [auditDays, setAuditDays] = useState('14')
+  const [auditSeverity, setAuditSeverity] = useState('all')
+  const [auditRefreshTick, setAuditRefreshTick] = useState(0)
+  const [isAuditLoading, setIsAuditLoading] = useState(false)
+  const [auditError, setAuditError] = useState('')
 
   const remoteMyPosts = useMemo(() => {
     if (!user) return []
@@ -574,6 +612,53 @@ export default function PerfilPage({ posts }) {
       isMounted = false
     }
   }, [activeTab, user?.id])
+
+  useEffect(() => {
+    let isMounted = true
+
+    async function loadSecurityAudit() {
+      if (!user?.isSecurityAdmin) {
+        if (isMounted) {
+          setAuditEvents([])
+          setAuditError('')
+          setIsAuditLoading(false)
+        }
+        return
+      }
+
+      setIsAuditLoading(true)
+      setAuditError('')
+
+      const daysRaw = Number.parseInt(String(auditDays), 10)
+      const days = Number.isFinite(daysRaw) ? Math.max(1, Math.min(90, daysRaw)) : 14
+
+      try {
+        const response = await getSecurityAuditEvents({
+          limit: 80,
+          days,
+          severity: auditSeverity === 'all' ? '' : auditSeverity,
+        })
+
+        if (!isMounted) return
+        setAuditEvents(Array.isArray(response?.items) ? response.items : [])
+      } catch (error) {
+        if (!isMounted) return
+        setAuditError(error instanceof Error ? error.message : 'No se pudo cargar la auditoria de seguridad.')
+      } finally {
+        if (isMounted) {
+          setIsAuditLoading(false)
+        }
+      }
+    }
+
+    if (activeTab === 'Seguridad') {
+      loadSecurityAudit()
+    }
+
+    return () => {
+      isMounted = false
+    }
+  }, [activeTab, user?.id, user?.isSecurityAdmin, auditDays, auditSeverity, auditRefreshTick])
 
   useEffect(() => {
     let isMounted = true
@@ -997,6 +1082,77 @@ export default function PerfilPage({ posts }) {
     }
   }
 
+  const onStartMfaSetup = async () => {
+    setSecurityStatus('')
+    setSecurityError('')
+    clearAuthError()
+
+    const response = await requestMfaSetup()
+    if (!response) return
+
+    setMfaSetupPayload(response)
+    setMfaEnableCode('')
+    setSecurityStatus('Escanea el codigo en tu app autenticadora y confirma con un TOTP de 6 digitos.')
+  }
+
+  const onEnableMfa = async () => {
+    setSecurityStatus('')
+    setSecurityError('')
+    clearAuthError()
+
+    const setupToken = typeof mfaSetupPayload?.setupToken === 'string' ? mfaSetupPayload.setupToken : ''
+    const code = String(mfaEnableCode || '').replace(/\D/g, '').slice(0, 6)
+
+    if (!setupToken) {
+      setSecurityError('Primero debes iniciar una configuracion MFA.')
+      return
+    }
+
+    if (!/^\d{6}$/.test(code)) {
+      setSecurityError('Ingresa un codigo MFA de 6 digitos para activar.')
+      return
+    }
+
+    const updated = await enableMfaForCurrentUser({ setupToken, code })
+    if (!updated) return
+
+    setMfaSetupPayload(null)
+    setMfaEnableCode('')
+    setMfaDisableCode('')
+    setSecurityStatus('MFA activado correctamente para tu cuenta.')
+  }
+
+  const onDisableMfa = async () => {
+    setSecurityStatus('')
+    setSecurityError('')
+    clearAuthError()
+
+    const code = String(mfaDisableCode || '').replace(/\D/g, '').slice(0, 6)
+    if (!/^\d{6}$/.test(code)) {
+      setSecurityError('Ingresa tu codigo MFA actual para desactivar esta proteccion.')
+      return
+    }
+
+    const updated = await disableMfaForCurrentUser({ code })
+    if (!updated) return
+
+    setMfaSetupPayload(null)
+    setMfaEnableCode('')
+    setMfaDisableCode('')
+    setSecurityStatus('MFA se desactivo correctamente.')
+  }
+
+  const onCancelMfaSetup = () => {
+    setMfaSetupPayload(null)
+    setMfaEnableCode('')
+    setSecurityError('')
+    setSecurityStatus('')
+  }
+
+  const onRefreshSecurityAudit = () => {
+    setAuditRefreshTick((current) => current + 1)
+  }
+
   function openPost(post) {
     if (post?.id) navigate(`/publicacion/${encodeURIComponent(String(post.id))}`)
   }
@@ -1069,6 +1225,171 @@ export default function PerfilPage({ posts }) {
           ) : recordingStatus !== 'subiendo' ? (
             <p className="route-message">{profileTabsLabels.Guardado.empty}</p>
           ) : null}
+        </section>
+      )
+    }
+
+    if (activeTab === 'Seguridad') {
+      const mfaIsEnabled = Boolean(user?.mfaEnabled)
+      const setupSecret = typeof mfaSetupPayload?.secret === 'string' ? mfaSetupPayload.secret : ''
+      const setupOtpAuthUrl = typeof mfaSetupPayload?.otpauthUrl === 'string' ? mfaSetupPayload.otpauthUrl : ''
+
+      return (
+        <section className="profile-tab-panel" aria-label="Seguridad de cuenta">
+          {securityError ? <p className="route-message error">{securityError}</p> : null}
+          {securityStatus ? <p className="route-message news-note">{securityStatus}</p> : null}
+
+          <div className="panel profile-security-panel">
+            <h2>Autenticacion de dos factores (MFA)</h2>
+            <p>
+              Refuerza tu cuenta con codigos TOTP de 6 digitos en Google Authenticator, Microsoft
+              Authenticator o Authy.
+            </p>
+
+            {mfaIsEnabled ? (
+              <div className="profile-security-enabled">
+                <div className="profile-security-facts">
+                  <article>
+                    <b>Estado</b>
+                    <span>Activo</span>
+                  </article>
+                  <article>
+                    <b>Activado</b>
+                    <span>{formatDateTime(user.mfaEnabledAt)}</span>
+                  </article>
+                  <article>
+                    <b>Ultimo uso</b>
+                    <span>{user.mfaLastUsedAt ? formatDateTime(user.mfaLastUsedAt) : 'Sin registros'}</span>
+                  </article>
+                </div>
+
+                <label className="profile-security-inline-field">
+                  Codigo MFA actual
+                  <input
+                    inputMode="numeric"
+                    maxLength={6}
+                    onChange={(event) => setMfaDisableCode(event.target.value)}
+                    placeholder="123456"
+                    value={mfaDisableCode}
+                  />
+                </label>
+
+                <button
+                  className="profile-follow subtle danger"
+                  disabled={isAuthBusy}
+                  onClick={onDisableMfa}
+                  type="button"
+                >
+                  {isAuthBusy ? 'Desactivando...' : 'Desactivar MFA'}
+                </button>
+              </div>
+            ) : (
+              <div className="profile-security-setup">
+                {!mfaSetupPayload ? (
+                  <button className="profile-follow" disabled={isAuthBusy} onClick={onStartMfaSetup} type="button">
+                    {isAuthBusy ? 'Preparando...' : 'Configurar MFA ahora'}
+                  </button>
+                ) : (
+                  <div className="profile-security-setup-flow">
+                    <p className="profile-security-step">1) Escanea o copia el secreto en tu app autenticadora.</p>
+                    {setupOtpAuthUrl ? (
+                      <a className="profile-security-link" href={setupOtpAuthUrl} rel="noreferrer" target="_blank">
+                        Abrir enlace de configuracion OTP
+                      </a>
+                    ) : null}
+                    {setupSecret ? <p className="profile-security-secret">Secreto: {setupSecret}</p> : null}
+
+                    <label className="profile-security-inline-field">
+                      2) Codigo de verificacion MFA
+                      <input
+                        inputMode="numeric"
+                        maxLength={6}
+                        onChange={(event) => setMfaEnableCode(event.target.value)}
+                        placeholder="123456"
+                        value={mfaEnableCode}
+                      />
+                    </label>
+
+                    <div className="profile-security-actions">
+                      <button className="profile-follow" disabled={isAuthBusy} onClick={onEnableMfa} type="button">
+                        {isAuthBusy ? 'Activando...' : 'Confirmar y activar MFA'}
+                      </button>
+                      <button className="profile-follow subtle" onClick={onCancelMfaSetup} type="button">
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {user?.isSecurityAdmin ? (
+            <div className="panel profile-security-audit-panel">
+              <h2>Auditoria de seguridad</h2>
+
+              <div className="profile-security-audit-toolbar">
+                <label>
+                  Ventana
+                  <select onChange={(event) => setAuditDays(event.target.value)} value={auditDays}>
+                    <option value="7">7 dias</option>
+                    <option value="14">14 dias</option>
+                    <option value="30">30 dias</option>
+                    <option value="60">60 dias</option>
+                  </select>
+                </label>
+
+                <label>
+                  Severidad
+                  <select onChange={(event) => setAuditSeverity(event.target.value)} value={auditSeverity}>
+                    <option value="all">Todas</option>
+                    <option value="low">Baja</option>
+                    <option value="medium">Media</option>
+                    <option value="high">Alta</option>
+                    <option value="critical">Critica</option>
+                  </select>
+                </label>
+
+                <button className="profile-follow subtle" onClick={onRefreshSecurityAudit} type="button">
+                  Actualizar
+                </button>
+              </div>
+
+              {auditError ? <p className="route-message error">{auditError}</p> : null}
+              {isAuditLoading ? <p className="route-message">Cargando auditoria...</p> : null}
+
+              {!isAuditLoading && !auditError ? (
+                auditEvents.length ? (
+                  <div className="profile-security-audit-list">
+                    {auditEvents.map((event) => {
+                      const details = summarizeAuditDetails(event.details)
+                      return (
+                        <article className={`profile-security-audit-item sev-${event.severity}`} key={event.id}>
+                          <div className="profile-security-audit-top">
+                            <b>{event.eventType}</b>
+                            <span>{formatDateTime(event.createdAt)}</span>
+                          </div>
+                          <p className="profile-security-audit-meta">
+                            {event.severity.toUpperCase()} · IP {event.requestIp || '--'} · usuario {event.userId || '--'}
+                          </p>
+                          {event.identifier ? (
+                            <p className="profile-security-audit-meta">Identificador: {event.identifier}</p>
+                          ) : null}
+                          {details ? <pre className="profile-security-audit-details">{details}</pre> : null}
+                        </article>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <p className="route-message">No hay eventos para los filtros actuales.</p>
+                )
+              ) : null}
+            </div>
+          ) : (
+            <p className="route-message news-note">
+              El panel de auditoria se habilita solo para cuentas incluidas en SECURITY_AUDIT_ADMIN_ALLOWLIST.
+            </p>
+          )}
         </section>
       )
     }
@@ -1488,16 +1809,18 @@ export default function PerfilPage({ posts }) {
       {composerStatus ? <p className="route-message news-note">{composerStatus}</p> : null}
 
       <nav className="profile-tabs" aria-label="Secciones del perfil">
-        {profileTabs.map((tab) => (
-          <button
-            className={activeTab === tab ? 'active' : ''}
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            type="button"
-          >
-            {tab}
-          </button>
-        ))}
+        <div className="profile-tabs-scroll">
+          {profileTabs.map((tab) => (
+            <button
+              className={activeTab === tab ? 'active' : ''}
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              type="button"
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
 
         <div className="profile-create-menu">
           <button

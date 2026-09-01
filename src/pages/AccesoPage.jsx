@@ -8,6 +8,7 @@ const ACCESS_MODES = {
   login: 'login',
   register: 'register',
   verify: 'verify',
+  mfa: 'mfa',
 }
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
@@ -173,13 +174,16 @@ export default function AccesoPage() {
     isAuthBusy,
     authError,
     verificationChallenge,
+    mfaLoginChallenge,
     clearAuthError,
     clearVerificationChallenge,
+    clearMfaLoginChallenge,
     login,
     loginWithApple,
     loginWithGoogle,
     register,
     resendVerificationCode,
+    verifyMfaLoginCode,
     verifyEmailCode,
   } = useAuth()
 
@@ -209,6 +213,9 @@ export default function AccesoPage() {
     email: '',
     code: '',
   })
+  const [mfaForm, setMfaForm] = useState({
+    code: '',
+  })
   const [verificationHint, setVerificationHint] = useState('')
   const [providersResolved, setProvidersResolved] = useState(false)
   const [localError, setLocalError] = useState('')
@@ -220,6 +227,7 @@ export default function AccesoPage() {
       : 'Te enviamos un codigo de verificacion a tu correo.'
     : ''
   const panelVerificationHint = verificationHint || fallbackVerificationHint
+  const mfaHint = typeof mfaLoginChallenge?.hint === 'string' ? mfaLoginChallenge.hint : ''
 
   const redirectPath = useMemo(() => {
     const from = location.state?.from
@@ -227,7 +235,11 @@ export default function AccesoPage() {
     if (from?.pathname) return from.pathname
     return '/perfil'
   }, [location.state])
-  const activeMode = verificationChallenge?.email ? ACCESS_MODES.verify : mode
+  const activeMode = mfaLoginChallenge?.mfaToken
+    ? ACCESS_MODES.mfa
+    : verificationChallenge?.email
+      ? ACCESS_MODES.verify
+      : mode
 
   useEffect(() => {
     let isMounted = true
@@ -284,6 +296,7 @@ export default function AccesoPage() {
 
     if (nextMode === ACCESS_MODES.login) {
       clearVerificationChallenge()
+      clearMfaLoginChallenge()
     }
   }
 
@@ -300,6 +313,11 @@ export default function AccesoPage() {
   const onVerifyField = (field) => (event) => {
     const value = event.target.value
     setVerifyForm((current) => ({ ...current, [field]: value }))
+  }
+
+  const onMfaField = (field) => (event) => {
+    const value = event.target.value
+    setMfaForm((current) => ({ ...current, [field]: value }))
   }
 
   const handleLoginSubmit = async (event) => {
@@ -391,6 +409,29 @@ export default function AccesoPage() {
 
     setVerifyForm({ email: '', code: '' })
     setVerificationHint('')
+  }
+
+  const handleMfaSubmit = async (event) => {
+    event.preventDefault()
+    setLocalError('')
+
+    const mfaToken = typeof mfaLoginChallenge?.mfaToken === 'string' ? mfaLoginChallenge.mfaToken : ''
+    const code = sanitizeText(mfaForm.code).replace(/\D/g, '').slice(0, 6)
+
+    if (!mfaToken) {
+      setLocalError('El desafio MFA no es valido. Inicia sesion nuevamente.')
+      return
+    }
+
+    if (!/^\d{6}$/.test(code)) {
+      setLocalError('El codigo MFA debe tener 6 digitos')
+      return
+    }
+
+    const user = await verifyMfaLoginCode({ mfaToken, code })
+    if (!user) return
+
+    setMfaForm({ code: '' })
   }
 
   const handleResendCode = async () => {
@@ -679,6 +720,48 @@ export default function AccesoPage() {
                       Reenviar codigo
                     </button>
                     <button className="access-linklike" onClick={handleMode(ACCESS_MODES.login)} type="button">
+                      Volver al login
+                    </button>
+                  </div>
+                </form>
+              </div>
+            ) : activeMode === ACCESS_MODES.mfa ? (
+              <div className="access-pane active" id="pane-mfa">
+                <h2>Verificacion MFA</h2>
+                <p className="access-sub">
+                  Ingresa el codigo de 6 digitos de tu app autenticadora
+                  {mfaHint ? ` para ${mfaHint}` : ''}.
+                </p>
+
+                <form onSubmit={handleMfaSubmit}>
+                  <div className="access-field">
+                    <label>Codigo MFA</label>
+                    <div className="access-inputwrap">
+                      <span className="access-ic">#</span>
+                      <input
+                        inputMode="numeric"
+                        maxLength={6}
+                        onChange={onMfaField('code')}
+                        placeholder="123456"
+                        value={mfaForm.code}
+                      />
+                    </div>
+                  </div>
+
+                  <button className="access-submitbtn" disabled={isAuthBusy} type="submit">
+                    {isAuthBusy ? 'Verificando...' : 'Validar y entrar'}
+                  </button>
+
+                  <div className="access-rowbetween">
+                    <button
+                      className="access-linklike"
+                      onClick={() => {
+                        clearMfaLoginChallenge()
+                        setMfaForm({ code: '' })
+                        setMode(ACCESS_MODES.login)
+                      }}
+                      type="button"
+                    >
                       Volver al login
                     </button>
                   </div>
