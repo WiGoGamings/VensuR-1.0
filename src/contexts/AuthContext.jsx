@@ -143,6 +143,8 @@ export function AuthProvider({ children }) {
     setVerificationChallenge({
       email,
       verificationSent: Boolean(payload?.verificationSent),
+      verificationTransport: typeof payload?.verificationTransport === 'string' ? payload.verificationTransport : '',
+      verificationHint: typeof payload?.verificationHint === 'string' ? payload.verificationHint : '',
       debugVerificationCode:
         typeof payload?.debugVerificationCode === 'string' ? payload.debugVerificationCode : '',
     })
@@ -213,6 +215,8 @@ export function AuthProvider({ children }) {
           saveVerificationChallenge({
             email: response.email || payload.email,
             verificationSent: response.verificationSent,
+            verificationTransport: response.verificationTransport,
+            verificationHint: response.verificationHint || response.message,
             debugVerificationCode: response.debugVerificationCode,
           })
           return null
@@ -220,7 +224,7 @@ export function AuthProvider({ children }) {
 
         applySession(response.user)
         setVerificationChallenge(null)
-  setMfaLoginChallenge(null)
+        setMfaLoginChallenge(null)
         return response.user
       } catch (error) {
         setAuthError(error instanceof Error ? error.message : 'No se pudo crear la cuenta')
@@ -250,6 +254,8 @@ export function AuthProvider({ children }) {
           saveVerificationChallenge({
             email: error.email || payload.identifier,
             verificationSent: error.verificationSent,
+            verificationTransport: error.verificationTransport,
+            verificationHint: error.verificationHint,
             debugVerificationCode: error.debugVerificationCode,
           })
         } else if (authErrorCode === 'MFA_REQUIRED') {
@@ -391,17 +397,27 @@ export function AuthProvider({ children }) {
 
       try {
         const response = await resendVerification({ email })
+        const sent = Boolean(response?.sent)
+        const alreadyVerified = Boolean(response?.alreadyVerified)
+        const verificationHint = typeof response?.verificationHint === 'string' ? response.verificationHint : ''
 
         saveVerificationChallenge({
           email,
-          verificationSent: response?.sent,
+          verificationSent: sent,
+          verificationTransport: response?.verificationTransport,
+          verificationHint,
           debugVerificationCode: response?.debugVerificationCode,
         })
 
-        return true
+        return {
+          ok: true,
+          sent,
+          alreadyVerified,
+          verificationHint,
+        }
       } catch (error) {
         setAuthError(error instanceof Error ? error.message : 'No se pudo reenviar el codigo')
-        return false
+        return null
       } finally {
         setIsBusy(false)
       }

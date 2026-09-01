@@ -147,6 +147,8 @@ test('registro -> verificacion -> login -> reaccion persistente', async () => {
   assert.equal(registerRes.status, 201)
   const registerBody = await registerRes.json()
   assert.equal(registerBody.requiresEmailVerification, true)
+  assert.equal(registerBody.verificationSent, false)
+  assert.equal(registerBody.verificationTransport, 'console')
   assert.match(String(registerBody.debugVerificationCode), /^\d{6}$/)
 
   const verifyRes = await fetch(`${BASE_URL}/api/auth/verify-email`, {
@@ -210,6 +212,32 @@ test('registro -> verificacion -> login -> reaccion persistente', async () => {
   const unlikeBody = await unlikeRes.json()
   assert.equal(unlikeBody.liked, false)
   assert.equal(unlikeBody.post.reactions, 0)
+})
+
+test('resend de verificacion refleja entrega no SMTP en entorno de pruebas', async () => {
+  const stamp = `${Date.now()}${Math.floor(Math.random() * 1e4)}`
+  const email = `resend_${stamp}@vensur.test`
+  const username = `resend${stamp}`.slice(0, 20)
+
+  const registerRes = await fetch(`${BASE_URL}/api/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, username, displayName: 'Reenvio Test', password: 'clave-super-segura' }),
+  })
+  assert.equal(registerRes.status, 201)
+
+  const resendRes = await fetch(`${BASE_URL}/api/auth/resend-verification`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  })
+  assert.equal(resendRes.status, 200)
+
+  const resendBody = await resendRes.json()
+  assert.equal(resendBody.ok, true)
+  assert.equal(resendBody.sent, false)
+  assert.equal(resendBody.verificationTransport, 'console')
+  assert.match(String(resendBody.debugVerificationCode), /^\d{6}$/)
 })
 
 test('el rate limiter de /api/auth responde 429 tras varios intentos', async () => {

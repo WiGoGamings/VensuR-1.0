@@ -57,6 +57,115 @@ test('seguir y dejar de seguir a otro usuario ajusta los contadores', async () =
   assert.equal(unfollowBody.counts.followers, 0)
 })
 
+test('directorio de en vivo muestra sesiones activas para usuarios autenticados', async () => {
+  const owner = await createVerifiedUser(server.baseUrl, { visibility: 'public' })
+  const viewer = await createVerifiedUser(server.baseUrl, { visibility: 'public' })
+
+  const startRes = await fetch(`${server.baseUrl}/api/content/live/sessions`, {
+    method: 'POST',
+    headers: authHeaders(owner.token),
+    body: JSON.stringify({ title: 'Directo abierto de prueba' }),
+  })
+  assert.equal(startRes.status, 201)
+  const { session } = await startRes.json()
+  assert.ok(session?.id)
+
+  const listRes = await fetch(`${server.baseUrl}/api/content/live/sessions`, {
+    headers: authHeaders(viewer.token),
+  })
+  assert.equal(listRes.status, 200)
+  const listBody = await listRes.json()
+  const found = listBody.items.find((item) => item.id === session.id)
+  assert.ok(found)
+  assert.equal(found.canView, true)
+
+  await fetch(`${server.baseUrl}/api/content/live/sessions/${session.id}/stop`, {
+    method: 'POST',
+    headers: authHeaders(owner.token),
+  })
+})
+
+test('seguidores reciben notificaciones por en vivo, historia y publicacion', async () => {
+  const owner = await createVerifiedUser(server.baseUrl, { visibility: 'public' })
+  const follower = await createVerifiedUser(server.baseUrl, { visibility: 'public' })
+  const outsider = await createVerifiedUser(server.baseUrl, { visibility: 'public' })
+
+  const followRes = await fetch(`${server.baseUrl}/api/content/users/${owner.username}/follow`, {
+    method: 'POST',
+    headers: authHeaders(follower.token),
+  })
+  assert.equal(followRes.status, 201)
+
+  const liveRes = await fetch(`${server.baseUrl}/api/content/live/sessions`, {
+    method: 'POST',
+    headers: authHeaders(owner.token),
+    body: JSON.stringify({ title: 'Directo para seguidores' }),
+  })
+  assert.equal(liveRes.status, 201)
+  const liveBody = await liveRes.json()
+  assert.ok(liveBody.session?.id)
+
+  const storyForm = new FormData()
+  storyForm.append('title', 'Historia para seguidores')
+  storyForm.append('description', 'Prueba de alerta de historia')
+  const storyRes = await fetch(`${server.baseUrl}/api/content/me/stories`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${owner.token}` },
+    body: storyForm,
+  })
+  assert.equal(storyRes.status, 201)
+  const storyBody = await storyRes.json()
+  assert.ok(storyBody.story?.id)
+
+  const postForm = new FormData()
+  postForm.append('caption', 'Publicacion para notificar a seguidores')
+  const postRes = await fetch(`${server.baseUrl}/api/content/me/posts`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${owner.token}` },
+    body: postForm,
+  })
+  assert.equal(postRes.status, 201)
+  const postBody = await postRes.json()
+  assert.ok(postBody.post?.id)
+
+  const inboxRes = await fetch(`${server.baseUrl}/api/content/me/notifications`, {
+    headers: authHeaders(follower.token),
+  })
+  assert.equal(inboxRes.status, 200)
+  const inbox = await inboxRes.json()
+  assert.ok(Array.isArray(inbox.items))
+  assert.ok(inbox.unread >= 3)
+
+  const byType = new Map(inbox.items.map((item) => [item.type, item]))
+  assert.ok(byType.has('live_started'))
+  assert.ok(byType.has('story_published'))
+  assert.ok(byType.has('post_published'))
+  assert.ok(byType.get('live_started').targetPath.includes(liveBody.session.id))
+  assert.ok(byType.get('story_published').targetPath.includes(storyBody.story.id))
+  assert.ok(byType.get('post_published').targetPath.includes(postBody.post.id))
+
+  const outsiderRes = await fetch(`${server.baseUrl}/api/content/me/notifications`, {
+    headers: authHeaders(outsider.token),
+  })
+  assert.equal(outsiderRes.status, 200)
+  const outsiderInbox = await outsiderRes.json()
+  assert.equal(outsiderInbox.items.length, 0)
+
+  const readRes = await fetch(`${server.baseUrl}/api/content/me/notifications/read`, {
+    method: 'POST',
+    headers: authHeaders(follower.token),
+    body: JSON.stringify({}),
+  })
+  assert.equal(readRes.status, 200)
+  const readBody = await readRes.json()
+  assert.equal(readBody.unread, 0)
+
+  await fetch(`${server.baseUrl}/api/content/live/sessions/${liveBody.session.id}/stop`, {
+    method: 'POST',
+    headers: authHeaders(owner.token),
+  })
+})
+
 test('amistad reciproca habilita ver contenido privado', async () => {
   const owner = await createVerifiedUser(server.baseUrl, { visibility: 'private' })
   const friend = await createVerifiedUser(server.baseUrl, { visibility: 'public' })

@@ -530,7 +530,7 @@ export function LiveBroadcastProvider({ children }) {
         setViewers([])
         setStartedAt(startTs)
         setIsLive(true)
-        setStatus('En vivo. Tus seguidores ya pueden verte.')
+        setStatus('En vivo. Los usuarios activos ya pueden descubrir tu directo.')
 
         startRecording(streamRef.current)
         startPolling(createdId)

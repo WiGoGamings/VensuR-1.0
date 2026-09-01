@@ -5,6 +5,7 @@ import RightRail from './components/layout/RightRail'
 import TopBar from './components/layout/TopBar'
 import { useAuth } from './contexts/AuthContext'
 import useLayoutConfig from './hooks/useLayoutConfig'
+import useNotifications from './hooks/useNotifications'
 import usePosts from './hooks/usePosts'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import './App.css'
@@ -64,6 +65,15 @@ function App() {
     toggleLike,
   } = usePosts({ isAuthenticated, enabled: needsPosts })
 
+  const {
+    notifications,
+    unreadCount,
+    isLoading: isNotificationsLoading,
+    errorMessage: notificationsError,
+    refreshNotifications,
+    markAllAsRead,
+  } = useNotifications({ isAuthenticated, enabled: true })
+
   const loadingRouteFallback = (
     <section className="feed route-page">
       <p className="route-message">Cargando pagina...</p>
@@ -74,7 +84,17 @@ function App() {
     <main className="app-shell">
       <div className="flagbar" />
 
-      <TopBar links={topLinks} currentUser={user} onLogout={logout} />
+      <TopBar
+        links={topLinks}
+        currentUser={user}
+        onLogout={logout}
+        notifications={notifications}
+        unreadNotifications={unreadCount}
+        isNotificationsLoading={isNotificationsLoading}
+        notificationsError={notificationsError}
+        onRefreshNotifications={refreshNotifications}
+        onMarkAllNotificationsRead={markAllAsRead}
+      />
 
       <div className={`layout ${showRightRail ? '' : 'layout-expanded'}`.trim()} id="top">
         <LeftRail items={navItems} activityLinks={activityLinks} currentUser={user} />

@@ -44,3 +44,6 @@ coverage/
 # Videos pesados (exceden el límite de 100 MB de GitHub). Se mantienen en disco.
 public/videos/colectivosV1.mp4
 public/Las 15 Maravillas de VENEZUELA que parecen de otro planeta _ 4K.mp4
+
+# Local Netlify folder
+.netlify

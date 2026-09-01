@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { listFollowingLiveSessions } from '../services/liveApi'
+import { listLiveSessions } from '../services/liveApi'
 import './Pages.css'
 
 const LIVE_SESSIONS_REFRESH_MS = 5000
@@ -44,7 +44,7 @@ export default function VivoPage() {
       if (!silent) setIsLoading(true)
 
       try {
-        const payload = await listFollowingLiveSessions()
+        const payload = await listLiveSessions()
         setSessions(toLiveList(payload))
         setErrorMessage('')
       } catch (error) {
@@ -83,8 +83,8 @@ export default function VivoPage() {
     return (
       <section className="feed route-page vivo-page">
         <article className="vivo-empty panel">
-          <h2>En vivo para seguidores</h2>
-          <p>Inicia sesión para ver transmisiones en tiempo real de las cuentas que sigues.</p>
+          <h2>En vivo ahora</h2>
+          <p>Inicia sesión para ver transmisiones activas y entrar a las salas disponibles.</p>
           <Link to="/acceso">Ir a acceso</Link>
         </article>
       </section>
@@ -106,7 +106,7 @@ export default function VivoPage() {
       {!isLoading && sessions.length === 0 ? (
         <article className="vivo-empty panel">
           <h2>No hay transmisiones activas</h2>
-          <p>Cuando una cuenta que sigues inicie un en vivo, aparecerá aquí para que entres al directo.</p>
+          <p>Cuando alguien inicie un en vivo, aparecerá aquí para entrar al directo.</p>
         </article>
       ) : null}
 
@@ -131,13 +131,22 @@ export default function VivoPage() {
               <span>{session.ownerDisplayName || session.ownerUsername}</span>
             </div>
 
-            <button
-              className="vivo-btn danger"
-              onClick={() => navigate(`/directo/${encodeURIComponent(session.id)}`)}
-              type="button"
-            >
-              Entrar al directo
-            </button>
+            {session.canView ? (
+              <button
+                className="vivo-btn danger"
+                onClick={() => navigate(`/directo/${encodeURIComponent(session.id)}`)}
+                type="button"
+              >
+                Entrar al directo
+              </button>
+            ) : (
+              <Link
+                className="vivo-btn"
+                to={session.ownerUsername ? `/usuario/${encodeURIComponent(session.ownerUsername)}` : '/explorar'}
+              >
+                Seguir para entrar
+              </Link>
+            )}
           </article>
         ))}
       </div>

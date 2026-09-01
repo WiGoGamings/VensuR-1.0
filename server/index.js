@@ -685,6 +685,8 @@ const LIVE_STREAM_IDLE_VIEWER_TTL_MS = 45 * 60 * 1000
 const LIVE_RECORDING_TTL_HOURS = Number.parseInt(process.env.LIVE_RECORDING_TTL_HOURS ?? '72', 10) || 72
 const LIVE_RECORDING_MAX_BYTES = Number.parseInt(process.env.LIVE_RECORDING_MAX_BYTES ?? '', 10) || 180 * 1024 * 1024
 const LIVE_RECORDING_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
+const USER_NOTIFICATIONS_MAX_LIMIT = 80
+const USER_NOTIFICATIONS_DEFAULT_LIMIT = 24
 const STORY_FILTER_NAMES = new Set([
   // Legado
   'none', 'warm', 'cold', 'mono', 'dramatic',
@@ -998,6 +1000,21 @@ function runMigrations() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS user_notifications (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      actor_user_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL DEFAULT '',
+      title TEXT NOT NULL DEFAULT '',
+      message TEXT NOT NULL DEFAULT '',
+      metadata_json TEXT NOT NULL DEFAULT '',
+      read_at TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_posts_user_created_at ON posts(user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_post_comments_post_created_at ON post_comments(post_id, created_at DESC);
@@ -1024,6 +1041,8 @@ function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_auth_refresh_tokens_expires ON auth_refresh_tokens(expires_at);
     CREATE INDEX IF NOT EXISTS idx_security_audit_events_created ON security_audit_events(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_security_audit_events_type_created ON security_audit_events(event_type, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_user_notifications_user_created ON user_notifications(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_user_notifications_user_unread ON user_notifications(user_id, read_at, created_at DESC);
   `)
 
   ensureColumn('users', 'bio', "TEXT NOT NULL DEFAULT ''")
@@ -1232,6 +1251,71 @@ const countFollowingByUserStmt = db.prepare(`
   SELECT COUNT(*) AS total
   FROM follows
   WHERE follower_user_id = ?
+`)
+
+const listFollowerIdsByUserStmt = db.prepare(`
+  SELECT follower_user_id
+  FROM follows
+  WHERE followed_user_id = ?
+`)
+
+const insertUserNotificationStmt = db.prepare(`
+  INSERT INTO user_notifications (
+    id,
+    user_id,
+    actor_user_id,
+    event_type,
+    entity_id,
+    title,
+    message,
+    metadata_json,
+    read_at,
+    created_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?)
+`)
+
+const listUserNotificationsByUserStmt = db.prepare(`
+  SELECT
+    n.id,
+    n.user_id,
+    n.actor_user_id,
+    n.event_type,
+    n.entity_id,
+    n.title,
+    n.message,
+    n.metadata_json,
+    n.read_at,
+    n.created_at,
+    u.username AS actor_username,
+    u.display_name AS actor_display_name,
+    u.avatar_url AS actor_avatar_url
+  FROM user_notifications n
+  JOIN users u ON u.id = n.actor_user_id
+  WHERE n.user_id = ?
+  ORDER BY n.created_at DESC
+  LIMIT ?
+`)
+
+const countUnreadUserNotificationsByUserStmt = db.prepare(`
+  SELECT COUNT(*) AS total
+  FROM user_notifications
+  WHERE user_id = ?
+    AND read_at = ''
+`)
+
+const markUserNotificationReadStmt = db.prepare(`
+  UPDATE user_notifications
+  SET read_at = ?
+  WHERE user_id = ?
+    AND id = ?
+    AND read_at = ''
+`)
+
+const markAllUserNotificationsReadStmt = db.prepare(`
+  UPDATE user_notifications
+  SET read_at = ?
+  WHERE user_id = ?
+    AND read_at = ''
 `)
 
 const selectAcceptedFriendshipByPairStmt = db.prepare(`
@@ -1673,6 +1757,28 @@ const listFollowingLiveSessionsStmt = db.prepare(`
   LIMIT 80
 `)
 
+const listActiveLiveSessionsStmt = db.prepare(`
+  SELECT
+    l.id,
+    l.owner_user_id,
+    l.title,
+    l.description,
+    l.status,
+    l.started_at,
+    l.ended_at,
+    l.created_at,
+    l.updated_at,
+    u.username,
+    u.display_name,
+    u.avatar_url,
+    u.profile_visibility
+  FROM live_streams l
+  JOIN users u ON u.id = l.owner_user_id
+  WHERE l.status = 'active'
+  ORDER BY l.started_at DESC
+  LIMIT 120
+`)
+
 const stopLiveSessionStmt = db.prepare(`
   UPDATE live_streams
   SET status = 'ended', ended_at = ?, updated_at = ?
@@ -2083,6 +2189,29 @@ function storyMetadataToJson(value) {
     return JSON.stringify(value)
   } catch {
     return ''
+  }
+}
+
+function safeJsonStringify(value) {
+  if (!value || typeof value !== 'object') return '{}'
+
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return '{}'
+  }
+}
+
+function safeJsonParseObject(value) {
+  if (typeof value !== 'string') return null
+  const text = value.trim()
+  if (!text) return null
+
+  try {
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
   }
 }
 
@@ -4114,10 +4243,108 @@ function isUserFollowing(viewerUserId, targetUserId) {
   return Boolean(selectFollowRelationStmt.get(viewerUserId, targetUserId))
 }
 
-function canViewerJoinLiveSession(viewerUserId, ownerUserId) {
+function canViewerJoinLiveSession(viewerUserId, ownerUserId, ownerVisibility = 'public') {
   if (!viewerUserId || !ownerUserId) return false
   if (viewerUserId === ownerUserId) return true
+  if (normalizeProfileVisibility(ownerVisibility) === 'public') return true
   return isUserFollowing(viewerUserId, ownerUserId)
+}
+
+function countUnreadUserNotifications(userId) {
+  return toNumeric(countUnreadUserNotificationsByUserStmt.get(userId)?.total)
+}
+
+function buildNotificationTargetPath(eventType, entityId, metadata = null) {
+  const explicitPath = safeString(metadata?.targetPath)
+  if (explicitPath.startsWith('/')) return explicitPath
+
+  const id = safeString(entityId)
+  if (!id) return '/vivo'
+
+  if (eventType === 'live_started') {
+    return `/directo/${encodeURIComponent(id)}`
+  }
+  if (eventType === 'story_published') {
+    return `/historias/${encodeURIComponent(id)}`
+  }
+  if (eventType === 'post_published') {
+    return `/publicacion/${encodeURIComponent(id)}`
+  }
+
+  return '/vivo'
+}
+
+function mapUserNotificationRow(row) {
+  const metadata = safeJsonParseObject(row.metadata_json)
+
+  return {
+    id: row.id,
+    type: row.event_type || '',
+    entityId: row.entity_id || '',
+    title: row.title || 'Nueva actividad',
+    message: row.message || '',
+    read: Boolean(row.read_at),
+    readAt: row.read_at || '',
+    createdAt: row.created_at || '',
+    targetPath: buildNotificationTargetPath(row.event_type, row.entity_id, metadata),
+    actor: {
+      id: row.actor_user_id || '',
+      username: row.actor_username || '',
+      displayName: row.actor_display_name || row.actor_username || 'Cuenta seguida',
+      avatarUrl: row.actor_avatar_url || '',
+    },
+  }
+}
+
+const insertFollowerNotificationsTx = db.transaction((recipientUserIds, payload) => {
+  for (const userId of recipientUserIds) {
+    insertUserNotificationStmt.run(
+      nanoid(),
+      userId,
+      payload.actorUserId,
+      payload.eventType,
+      payload.entityId,
+      payload.title,
+      payload.message,
+      payload.metadataJson,
+      payload.createdAt,
+    )
+  }
+})
+
+function notifyFollowersAboutActivity({
+  actor,
+  eventType,
+  entityId = '',
+  title = '',
+  message = '',
+  targetPath = '',
+}) {
+  const actorUserId = safeString(actor?.id)
+  if (!actorUserId) return 0
+
+  const recipients = Array.from(
+    new Set(
+      listFollowerIdsByUserStmt
+        .all(actorUserId)
+        .map((row) => safeString(row.follower_user_id))
+        .filter((userId) => userId && userId !== actorUserId),
+    ),
+  )
+
+  if (!recipients.length) return 0
+
+  insertFollowerNotificationsTx(recipients, {
+    actorUserId,
+    eventType: safeString(eventType) || 'activity',
+    entityId: safeString(entityId),
+    title: safeString(title).slice(0, 120) || 'Nueva actividad',
+    message: safeString(message).replace(/\s+/g, ' ').trim().slice(0, 280),
+    metadataJson: safeJsonStringify({ targetPath: safeString(targetPath) }),
+    createdAt: nowIso(),
+  })
+
+  return recipients.length
 }
 
 function normalizeSdp(rawSdp) {
@@ -4346,7 +4573,7 @@ function mapLiveSessionRow(row, viewerUserId = '') {
     startedAt: row.started_at || '',
     endedAt: row.ended_at || '',
     isOwner: viewerUserId === row.owner_user_id,
-    canView: canViewerJoinLiveSession(viewerUserId, row.owner_user_id),
+    canView: canViewerJoinLiveSession(viewerUserId, row.owner_user_id, row.profile_visibility),
     viewerCount: getLiveViewerCount(row.id),
     likes: liveRuntime.sessions.get(row.id)?.likes || 0,
   }
@@ -4462,13 +4689,24 @@ async function issueVerificationCode(user) {
   issueVerificationCodeTx(user.id, hashVerificationCode(code))
 
   let sent = false
+  let transport = 'failed'
 
   try {
     const result = await sendVerificationEmail(
       { email: user.email, displayName: user.display_name },
       code,
     )
-    sent = Boolean(result?.delivered)
+    const detectedTransport = safeString(result?.transport).toLowerCase()
+    transport = detectedTransport || 'unknown'
+
+    // Solo SMTP representa entrega real a buzones externos.
+    sent = Boolean(result?.delivered) && transport === 'smtp'
+
+    if (Boolean(result?.delivered) && transport !== 'smtp') {
+      console.warn(
+        `[VERIFICACION] Correo para ${user.email} generado con transporte "${transport}" sin entrega SMTP real.`,
+      )
+    }
   } catch (error) {
     // El fallo de envio no debe romper el registro: el usuario puede pedir reenvio.
     console.error(`[VERIFICACION] No se pudo enviar el correo a ${user.email}:`, error?.message || error)
@@ -4481,8 +4719,21 @@ async function issueVerificationCode(user) {
 
   return {
     sent,
+    transport,
     debugVerificationCode: EXPOSE_DEV_VERIFICATION_CODE ? code : undefined,
   }
+}
+
+function buildVerificationDispatchHint(verification) {
+  if (verification?.sent) {
+    return 'Te enviamos un codigo de verificacion a tu correo.'
+  }
+
+  if (typeof verification?.debugVerificationCode === 'string' && verification.debugVerificationCode) {
+    return 'No hay entrega SMTP configurada. Usa el codigo de desarrollo mostrado para verificar la cuenta.'
+  }
+
+  return 'No pudimos enviar el codigo por correo. Configura SMTP en el backend y vuelve a solicitar el reenvio.'
 }
 
 const upsertSocialUserTx = db.transaction((payload) => {
@@ -5125,8 +5376,10 @@ app.post('/api/auth/register', authRateLimiter, async (req, res) => {
       requiresEmailVerification: true,
       email,
       verificationSent: verification.sent,
+      verificationTransport: verification.transport,
+      verificationHint: buildVerificationDispatchHint(verification),
       debugVerificationCode: verification.debugVerificationCode,
-      message: 'Te enviamos un codigo de verificacion. Debes verificar tu correo antes de iniciar sesion.',
+      message: buildVerificationDispatchHint(verification),
     })
   } catch (error) {
     const conflictMessage = mapUserUniqueConstraintToMessage(error)
@@ -5211,6 +5464,8 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       errorCode: 'EMAIL_NOT_VERIFIED',
       email: user.email,
       verificationSent: verification.sent,
+      verificationTransport: verification.transport,
+      verificationHint: buildVerificationDispatchHint(verification),
       debugVerificationCode: verification.debugVerificationCode,
     })
     return
@@ -5318,6 +5573,8 @@ app.post('/api/auth/resend-verification', authRateLimiter, async (req, res) => {
     ok: true,
     sent: verification.sent,
     email,
+    verificationTransport: verification.transport,
+    verificationHint: buildVerificationDispatchHint(verification),
     debugVerificationCode: verification.debugVerificationCode,
   })
 })
@@ -6270,6 +6527,23 @@ app.delete('/api/content/users/:username/follow', requireAuth, (req, res) => {
   })
 })
 
+app.get('/api/content/live/sessions', requireAuth, (req, res) => {
+  const rows = listActiveLiveSessionsStmt.all()
+  const activeRows = rows.filter((row) => {
+    if (isLiveSessionExpired(row)) {
+      stopLiveSessionById(row.id)
+      return false
+    }
+
+    return row.status === 'active'
+  })
+
+  res.json({
+    total: activeRows.length,
+    items: activeRows.map((row) => mapLiveSessionRow(row, req.authUser.id)),
+  })
+})
+
 app.get('/api/content/live/sessions/following', requireAuth, (req, res) => {
   const rows = listFollowingLiveSessionsStmt.all(req.authUser.id, req.authUser.id)
   const activeRows = rows.filter((row) => {
@@ -6305,8 +6579,8 @@ app.get('/api/content/live/sessions/:sessionId', requireAuth, (req, res) => {
     return
   }
 
-  if (!canViewerJoinLiveSession(req.authUser.id, session.owner_user_id)) {
-    sendError(res, 403, 'Solo seguidores pueden ver esta transmision en vivo.')
+  if (!canViewerJoinLiveSession(req.authUser.id, session.owner_user_id, session.profile_visibility)) {
+    sendError(res, 403, 'Debes seguir esta cuenta para ver su transmision en vivo privada.')
     return
   }
 
@@ -6344,6 +6618,16 @@ app.post('/api/content/live/sessions', requireAuth, (req, res) => {
 
   ensureLiveRuntimeSession(sessionId)
   const created = selectLiveSessionByIdStmt.get(sessionId)
+
+  const actorName = req.authUser.display_name || req.authUser.username || 'Una cuenta que sigues'
+  notifyFollowersAboutActivity({
+    actor: req.authUser,
+    eventType: 'live_started',
+    entityId: sessionId,
+    title: `${actorName} inició un en vivo`,
+    message: title ? `Directo: ${title}` : 'Ya puedes entrar al directo.',
+    targetPath: `/directo/${encodeURIComponent(sessionId)}`,
+  })
 
   res.status(201).json({
     session: created ? mapLiveSessionRow(created, req.authUser.id) : null,
@@ -6496,8 +6780,8 @@ app.post('/api/content/live/sessions/:sessionId/viewers/offer', requireAuth, (re
     return
   }
 
-  if (!canViewerJoinLiveSession(req.authUser.id, session.owner_user_id)) {
-    sendError(res, 403, 'Solo seguidores pueden unirse a esta transmision.')
+  if (!canViewerJoinLiveSession(req.authUser.id, session.owner_user_id, session.profile_visibility)) {
+    sendError(res, 403, 'Debes seguir esta cuenta para unirte a su transmision privada.')
     return
   }
 
@@ -6702,8 +6986,8 @@ function resolveLiveRoomForViewer(req, res) {
     return null
   }
 
-  if (!canViewerJoinLiveSession(req.authUser.id, session.owner_user_id)) {
-    sendError(res, 403, 'Solo seguidores pueden entrar a esta sala en vivo.')
+  if (!canViewerJoinLiveSession(req.authUser.id, session.owner_user_id, session.profile_visibility)) {
+    sendError(res, 403, 'Debes seguir esta cuenta para entrar a su sala en vivo privada.')
     return null
   }
 
@@ -6911,6 +7195,29 @@ app.post('/api/content/me/posts', requireAuth, upload.single('media'), (req, res
     })
   }
 
+  const actorName = req.authUser.display_name || req.authUser.username || 'Una cuenta que sigues'
+  const cleanCaption = caption.replace(/\s+/g, ' ').trim().slice(0, 150)
+
+  notifyFollowersAboutActivity({
+    actor: req.authUser,
+    eventType: 'post_published',
+    entityId: postId,
+    title: `${actorName} publicó una nueva actualización`,
+    message: cleanCaption || 'Revisa su nueva publicación en el feed.',
+    targetPath: `/publicacion/${encodeURIComponent(postId)}`,
+  })
+
+  if (story?.id) {
+    notifyFollowersAboutActivity({
+      actor: req.authUser,
+      eventType: 'story_published',
+      entityId: story.id,
+      title: `${actorName} subió una historia`,
+      message: safeString(story.title).slice(0, 150) || 'Mira la historia más reciente.',
+      targetPath: `/historias/${encodeURIComponent(story.id)}`,
+    })
+  }
+
   res.status(201).json({
     post: mapPostRow(post),
     story,
@@ -7010,6 +7317,44 @@ app.get('/api/content/me/posts', requireAuth, (req, res) => {
 
   res.json({
     items: rows.map((row) => mapPostRow(row, { likedByViewer: likedPostIds.has(row.id) })),
+  })
+})
+
+app.get('/api/content/me/notifications', requireAuth, (req, res) => {
+  const requestedLimit = Number.parseInt(String(req.query?.limit ?? USER_NOTIFICATIONS_DEFAULT_LIMIT), 10)
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(USER_NOTIFICATIONS_MAX_LIMIT, requestedLimit))
+    : USER_NOTIFICATIONS_DEFAULT_LIMIT
+
+  const rows = listUserNotificationsByUserStmt.all(req.authUser.id, limit)
+
+  res.json({
+    unread: countUnreadUserNotifications(req.authUser.id),
+    items: rows.map(mapUserNotificationRow),
+  })
+})
+
+app.post('/api/content/me/notifications/read', requireAuth, (req, res) => {
+  const ids = Array.isArray(req.body?.ids)
+    ? req.body.ids
+      .map((value) => safeString(value))
+      .filter(Boolean)
+      .slice(0, USER_NOTIFICATIONS_MAX_LIMIT)
+    : []
+
+  const readAt = nowIso()
+
+  if (ids.length) {
+    for (const notificationId of ids) {
+      markUserNotificationReadStmt.run(readAt, req.authUser.id, notificationId)
+    }
+  } else {
+    markAllUserNotificationsReadStmt.run(readAt, req.authUser.id)
+  }
+
+  res.json({
+    ok: true,
+    unread: countUnreadUserNotifications(req.authUser.id),
   })
 })
 
@@ -7166,6 +7511,16 @@ app.post('/api/content/me/stories', requireAuth, upload.single('media'), (req, r
     sendError(res, 400, 'No se pudo crear la historia en este momento.')
     return
   }
+
+  const actorName = req.authUser.display_name || req.authUser.username || 'Una cuenta que sigues'
+  notifyFollowersAboutActivity({
+    actor: req.authUser,
+    eventType: 'story_published',
+    entityId: story.id,
+    title: `${actorName} subió una historia`,
+    message: safeString(story.title).slice(0, 150) || 'Mira la historia más reciente.',
+    targetPath: `/historias/${encodeURIComponent(story.id)}`,
+  })
 
   res.status(201).json({
     story,

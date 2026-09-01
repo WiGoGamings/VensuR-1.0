@@ -1,6 +1,6 @@
 import './TopBar.css'
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { memo, useEffect, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 
 function readSearchQuery(search) {
   const params = new URLSearchParams(search)
@@ -12,6 +12,43 @@ const TOP_NAV_ICONS = {
   '/': '⌂',
 }
 
+function compactBadge(total) {
+  const count = Number(total || 0)
+  if (!Number.isFinite(count) || count <= 0) return ''
+  return count > 99 ? '99+' : String(count)
+}
+
+function formatNotificationTime(value) {
+  const ts = Date.parse(typeof value === 'string' ? value : '')
+  if (!Number.isFinite(ts)) return 'hace un momento'
+
+  const diffMs = Math.max(0, Date.now() - ts)
+  const diffMin = Math.floor(diffMs / 60_000)
+
+  if (diffMin < 1) return 'hace un momento'
+  if (diffMin < 60) return `hace ${diffMin} min`
+
+  const diffHours = Math.floor(diffMin / 60)
+  if (diffHours < 24) return `hace ${diffHours} h`
+
+  const diffDays = Math.floor(diffHours / 24)
+  return `hace ${diffDays} d`
+}
+
+function describeNotification(item) {
+  if (item?.type === 'live_started') return 'Inició una transmisión en vivo.'
+  if (item?.type === 'story_published') return 'Subió una historia nueva.'
+  if (item?.type === 'post_published') return 'Publicó una nueva actualización.'
+  return 'Hay actividad nueva en una cuenta que sigues.'
+}
+
+function iconForNotification(type) {
+  if (type === 'live_started') return '▶'
+  if (type === 'story_published') return '◉'
+  if (type === 'post_published') return '✦'
+  return '•'
+}
+
 /**
  * @param {{
  * links: import('../../data/feedData').TopLink[],
@@ -21,15 +58,34 @@ const TOP_NAV_ICONS = {
  * displayName: string,
  * avatarUrl?: string
  * },
- * onLogout: () => void | Promise<boolean>
+ * onLogout: () => void | Promise<boolean>,
+ * notifications?: Array<any>,
+ * unreadNotifications?: number,
+ * isNotificationsLoading?: boolean,
+ * notificationsError?: string,
+ * onRefreshNotifications?: (options?: { silent?: boolean }) => Promise<void> | void,
+ * onMarkAllNotificationsRead?: () => Promise<void> | void
  * }} props
  */
-export default memo(function TopBar({ links, currentUser, onLogout }) {
+export default memo(function TopBar({
+  links,
+  currentUser,
+  onLogout,
+  notifications = [],
+  unreadNotifications = 0,
+  isNotificationsLoading = false,
+  notificationsError = '',
+  onRefreshNotifications,
+  onMarkAllNotificationsRead,
+}) {
   const location = useLocation()
   const navigate = useNavigate()
   const [searchValue, setSearchValue] = useState(() => readSearchQuery(location.search))
   const [isMenuOpen, setIsMenuOpen] = useState(false)
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false)
+  const notificationsRootRef = useRef(null)
   const topNavLinks = links.filter((link) => TOP_NAV_ALLOWED_PATHS.has(link.path))
+  const unreadBadge = compactBadge(unreadNotifications)
 
   useEffect(() => {
     if (location.pathname.startsWith('/explorar')) {
@@ -40,16 +96,43 @@ export default memo(function TopBar({ links, currentUser, onLogout }) {
   // Cierra el menú móvil al navegar o al pulsar Escape.
   useEffect(() => {
     setIsMenuOpen(false)
+    setIsNotificationsOpen(false)
   }, [location.pathname])
 
   useEffect(() => {
-    if (!isMenuOpen) return undefined
+    if (!isMenuOpen && !isNotificationsOpen) return undefined
     const onKey = (event) => {
-      if (event.key === 'Escape') setIsMenuOpen(false)
+      if (event.key !== 'Escape') return
+      setIsMenuOpen(false)
+      setIsNotificationsOpen(false)
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [isMenuOpen])
+  }, [isMenuOpen, isNotificationsOpen])
+
+  useEffect(() => {
+    if (!isNotificationsOpen) return undefined
+
+    const onPointerDown = (event) => {
+      if (notificationsRootRef.current?.contains(event.target)) return
+      setIsNotificationsOpen(false)
+    }
+
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [isNotificationsOpen])
+
+  useEffect(() => {
+    if (!isNotificationsOpen || !currentUser?.id || unreadNotifications <= 0 || !onMarkAllNotificationsRead) {
+      return undefined
+    }
+
+    const timerId = setTimeout(() => {
+      void onMarkAllNotificationsRead()
+    }, 650)
+
+    return () => clearTimeout(timerId)
+  }, [currentUser?.id, isNotificationsOpen, onMarkAllNotificationsRead, unreadNotifications])
 
   const onSearchSubmit = (event) => {
     event.preventDefault()
@@ -127,6 +210,69 @@ export default memo(function TopBar({ links, currentUser, onLogout }) {
       <div className="topbar-session" aria-label="Estado de sesion">
         {currentUser ? (
           <>
+            <div className="topbar-notifications" ref={notificationsRootRef}>
+              <button
+                aria-expanded={isNotificationsOpen}
+                aria-label="Notificaciones"
+                className={`notifications-toggle ${unreadBadge ? 'has-unread' : ''}`.trim()}
+                onClick={() => {
+                  const nextOpen = !isNotificationsOpen
+                  setIsNotificationsOpen(nextOpen)
+                  if (nextOpen && onRefreshNotifications) {
+                    void onRefreshNotifications({ silent: true })
+                  }
+                }}
+                type="button"
+              >
+                <span aria-hidden="true">🔔</span>
+                {unreadBadge ? <b>{unreadBadge}</b> : null}
+              </button>
+
+              {isNotificationsOpen ? (
+                <section className="notifications-popover" aria-label="Notificaciones de actividad">
+                  <div className="notifications-head">
+                    <strong>Notificaciones</strong>
+                    <button
+                      className="notifications-refresh"
+                      onClick={() => void onRefreshNotifications?.({ silent: false })}
+                      type="button"
+                    >
+                      Actualizar
+                    </button>
+                  </div>
+
+                  {notificationsError ? <p className="notifications-error">{notificationsError}</p> : null}
+
+                  <div className="notifications-list">
+                    {isNotificationsLoading && notifications.length === 0 ? (
+                      <p className="notifications-empty">Cargando notificaciones...</p>
+                    ) : null}
+
+                    {!isNotificationsLoading && notifications.length === 0 ? (
+                      <p className="notifications-empty">No hay notificaciones nuevas por ahora.</p>
+                    ) : null}
+
+                    {notifications.map((item) => (
+                      <Link
+                        className={`notifications-item ${item.read ? '' : 'is-unread'}`.trim()}
+                        key={item.id || `${item.type}-${item.createdAt}`}
+                        onClick={() => setIsNotificationsOpen(false)}
+                        to={item.targetPath || '/vivo'}
+                      >
+                        <span className="notifications-item-icon" aria-hidden="true">{iconForNotification(item.type)}</span>
+                        <span className="notifications-item-copy">
+                          <b>{item.title || 'Nueva actividad'}</b>
+                          <small>{item.message || describeNotification(item)}</small>
+                          <time>{formatNotificationTime(item.createdAt)}</time>
+                        </span>
+                        {!item.read ? <i className="notifications-item-dot" aria-hidden="true" /> : null}
+                      </Link>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+            </div>
+
             <Link className="session-user" to="/perfil">
               @{currentUser.username}
             </Link>

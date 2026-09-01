@@ -455,19 +455,119 @@
 
   .sala-chat {
     position: static;
-    height: 60vh;
-    min-height: 340px;
+    height: clamp(280px, 52dvh, 460px);
+    min-height: 280px;
   }
 }
 
 @media (max-width: 560px) {
+  .sala-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .sala-back {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .sala-head-title {
+    flex: 1 1 calc(100% - 110px);
+  }
+
   .sala-stage {
     border-radius: 0;
     margin-inline: -12px;
     width: calc(100% + 24px);
   }
 
+  .sala-head-meta {
+    width: 100%;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .sala-live-pill {
+    padding: 4px 8px;
+    font-size: 10px;
+  }
+
+  .sala-viewers {
+    font-size: 11px;
+  }
+
   .sala-head-title b {
-    font-size: 14px;
+    font-size: 13px;
+  }
+
+  .sala-head-title small {
+    font-size: 11px;
+  }
+
+  .sala-stage-hint {
+    bottom: 10px;
+    padding: 4px 10px;
+    font-size: 10px;
+  }
+
+  .sala-actions {
+    gap: 6px;
+  }
+
+  .sala-action {
+    padding: 7px 10px;
+    font-size: 12px;
+  }
+
+  .sala-action.like {
+    min-width: 60px;
+    justify-content: center;
+  }
+
+  .sala-action:not(.like) {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+
+  .sala-share-hint {
+    width: 100%;
+    order: 4;
+    font-size: 11px;
+  }
+
+  .sala-chat {
+    height: clamp(250px, 48dvh, 420px);
+  }
+
+  .sala-chat-head {
+    padding: 10px 12px;
+  }
+
+  .sala-chat-list {
+    padding: 10px 10px 6px;
+  }
+
+  .sala-chat-form {
+    padding: 8px;
+    gap: 5px;
+  }
+
+  .sala-chat-form input {
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+
+  .sala-send {
+    padding: 8px 11px;
+    font-size: 12px;
+  }
+
+  .sala-emojis {
+    grid-template-columns: repeat(7, 1fr);
+  }
+
+  .sala-error {
+    font-size: 12px;
   }
 }

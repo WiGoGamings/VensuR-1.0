@@ -43,6 +43,10 @@
     padding: 20px 16px 36px;
   }
 
+  .layout.layout-expanded {
+    grid-template-columns: 1fr;
+  }
+
   .sidebar,
   .right-rail {
     display: none;

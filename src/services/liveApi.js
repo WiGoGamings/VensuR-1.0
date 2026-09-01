@@ -11,6 +11,13 @@ function toEncoded(value) {
 /**
  * @returns {Promise<{ total: number, items: Array<any> }>}
  */
+export function listLiveSessions() {
+  return httpRequest('/api/content/live/sessions')
+}
+
+/**
+ * @returns {Promise<{ total: number, items: Array<any> }>}
+ */
 export function listFollowingLiveSessions() {
   return httpRequest('/api/content/live/sessions/following')
 }

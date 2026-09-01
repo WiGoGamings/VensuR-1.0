@@ -224,7 +224,10 @@ export default function AccesoPage() {
   const fallbackVerificationHint = challengeEmail
     ? verificationChallenge?.debugVerificationCode
       ? `Codigo de verificacion (desarrollo): ${verificationChallenge.debugVerificationCode}`
-      : 'Te enviamos un codigo de verificacion a tu correo.'
+      : verificationChallenge?.verificationSent
+        ? 'Te enviamos un codigo de verificacion a tu correo.'
+        : verificationChallenge?.verificationHint ||
+          'No se pudo enviar el codigo por correo. Configura SMTP en la API o solicita soporte.'
     : ''
   const panelVerificationHint = verificationHint || fallbackVerificationHint
   const mfaHint = typeof mfaLoginChallenge?.hint === 'string' ? mfaLoginChallenge.hint : ''
@@ -442,11 +445,23 @@ export default function AccesoPage() {
     }
 
     setLocalError('')
-    const wasResent = await resendVerificationCode(email)
+    const resendResult = await resendVerificationCode(email)
+    if (!resendResult) return
 
-    if (wasResent) {
-      setVerificationHint('Te reenviamos un nuevo codigo de verificacion.')
+    if (resendResult.alreadyVerified) {
+      setVerificationHint('Ese correo ya esta verificado. Inicia sesion con tu clave.')
+      return
     }
+
+    if (resendResult.sent) {
+      setVerificationHint('Te reenviamos un nuevo codigo de verificacion.')
+      return
+    }
+
+    setVerificationHint(
+      resendResult.verificationHint ||
+      'No pudimos reenviar el correo. Configura SMTP en la API y vuelve a intentar.',
+    )
   }
 
   const panelError = localError || authError
